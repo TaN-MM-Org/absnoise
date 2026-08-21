@@ -1,6 +1,6 @@
 # absnoise
 
-[![tests](https://github.com/TaN-MM-Org/absnoise/actions/workflows/ci.yml/badge.svg)](https://github.com/TaN-MM-Org/absnoise/actions)
+[![PyPI](https://img.shields.io/pypi/v/absnoise)](https://pypi.org/project/absnoise/) [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22048608-blue)](https://doi.org/10.5281/zenodo.22048608) [![tests](https://github.com/TaN-MM-Org/absnoise/actions/workflows/ci.yml/badge.svg)](https://github.com/TaN-MM-Org/absnoise/actions)
 
 **Andreev-bound-state occupation noise** in proximity Josephson
 junctions, computed from the level structure to the **detector budget**:

@@ -8,3 +8,7 @@ authors:
 version: 0.1.0
 license: Apache-2.0
 repository-code: "https://github.com/TaN-MM-Org/absnoise"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22048608
+    description: "Concept DOI for all versions; resolves to the latest release"
