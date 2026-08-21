@@ -14,7 +14,7 @@ detector.
 
 ## Status
 
-v0.1.0 (alpha). Implemented and tested:
+v0.2.0 (alpha). Implemented and tested:
 
 - exact finite-length ABS solver from the closed-form secular equation
   cos(2 arccos(E/Delta) - eta(E)) = 1 - tau + tau cos(phi), with the
@@ -36,6 +36,13 @@ v0.1.0 (alpha). Implemented and tested:
 - six cited graphene junction contact recipes (Jung et al., Table I)
   and graphene electronic thermodynamics (heat capacity,
   electron-phonon cooling, Lee et al.)
+- **matched-level design and nonlinear click dynamics (new in v0.2)**:
+  the matched condition Delta*(T0) = 2.3994 kB T0 solved from the gap
+  equation (`matched_Tc`, `matched_recipe`), the full nonlinear
+  post-deposit response with a stiffness-safe exponential integrator
+  (`click_template`), a whitened matched-filter single-photon click
+  Monte Carlo with all three noise channels (`click_monte_carlo`), and
+  the exact self-heating steady state (`steady_temperature`)
 
 Verified against closed forms in the test suite rather than asserted:
 the short-junction limit E = Delta sqrt(1 - tau sin^2(phi/2)) to 1e-12;
@@ -53,12 +60,20 @@ plateau, knee, and the variance convention var = S(0)/(2t)
 (statistics-limited tolerances); and the exact Lorentzian knee of the
 predicted resonator frequency-noise spectrum.
 
+For v0.2 the test suite additionally asserts: the matched-level
+condition to 1e-9 from the solved gap equation; energy conservation of
+the click integrator to machine precision through the exact
+peak-temperature identity; dip-and-recovery of the occupation template
+in both exchange scenarios; photon-versus-dark ordering of the click
+Monte Carlo; and the exact closed-form round trip of the self-heating
+steady state.
+
 Not yet implemented, stated plainly because they matter physically:
 continuum contributions to the occupation channel are neglected (bound
 levels dominate for L < xi; the largest L/xi in the recipe set is
-0.43), self-heating back-action on the phonon bath is not modeled, and
-the nonlinear single-photon click dynamics of the accompanying
-manuscript remains in the paper repository.
+0.43; `continuum_share` quantifies the supercurrent-channel analog),
+and phonon-bath heating by the substrate is treated only through the
+steady-state electron temperature, not dynamically.
 
 ## Install and use
 
@@ -108,10 +123,11 @@ them must arrive with a new source.
 > detectors"; code for the paper:
 > https://github.com/Tanvir-Mahmud-Mahim/andreev-occupation-noise
 
-This package is the general-purpose engine; the paper repository
-reproduces the specific study, including the figures, the
-approximation-resolution analysis, and the nonlinear single-photon
-click Monte Carlo.
+This package is the general-purpose engine (v0.2 includes the
+matched-level design and the nonlinear click Monte Carlo); the paper
+repository reproduces the specific study: the device grids, the
+figures, the approximation-resolution analysis, and the archived trial
+data.
 
 ## Citing the tool
 
