@@ -105,3 +105,21 @@ def n_modes(recipe: Recipe) -> int:
     n = carrier_density(recipe.Vbg)
     kf = np.sqrt(np.pi * n)
     return max(1, int(np.floor(kf * recipe.W / np.pi)))
+
+
+def steady_temperature(P, Tp, area, sigma=2.0, delta=3):
+    """Self-heating steady state: the electron temperature at which the
+    electron-phonon cooling balances a continuous absorbed power P (W),
+
+        Sigma A (Te^delta - Tp^delta) = P
+        =>  Te = (Tp^delta + P / (Sigma A))^(1/delta),
+
+    an exact closed form. Use it to quantify readout-dissipation
+    back-action: evaluate responsivities and noise at this Te instead
+    of the phonon temperature. The test suite verifies the exact
+    round trip ep_power(steady_temperature(P)) = P."""
+    P = np.asarray(P, dtype=float)
+    if np.any(P < 0):
+        raise ValueError("absorbed power must be non-negative")
+    out = (Tp ** delta + P / (sigma * area)) ** (1.0 / delta)
+    return float(out) if out.ndim == 0 else out
