@@ -103,6 +103,24 @@ Units are SI throughout; PSDs are single-sided with the variance
 convention var(t-average) = S(0)/(2t), validated by Monte Carlo in the
 test suite.
 
+## Allan variance (new in v0.3)
+
+Occupation noise is exponentially correlated, so the practical question
+for a thermometer readout is stability versus integration time:
+averaging helps until the correlation time is passed, then improves
+only as the white floor S(0)/(2T). `allan_variance` computes the
+overlapping two-sample variance of a sampled series (Allan, Proc. IEEE
+54, 221 (1966); Riley, NIST SP 1065, 2008), and `avar_exponential`
+gives the closed form this package's own noise obeys,
+
+    AVAR(T) = var (tau/T^2) (2T - 3 tau + 4 tau e^(-T/tau)
+              - tau e^(-2T/tau)),
+
+with `avar_white` the S0/(2T) floor. The closed form is not taken on
+faith: the test suite integrates the defining double integrals
+numerically and checks both limits, a machine-precision drift identity,
+and seeded telegraph Monte Carlo against it.
+
 ## Cited constants
 
 The six junction recipes ship with full provenance: Table I of W. Jung,
