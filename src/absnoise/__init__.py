@@ -26,11 +26,12 @@ from .finitelength import FiniteLJunction
 from .master import (channel_generator, noneq_penalty, sigma_spectrum,
                      tau_activated)
 from .telegraph import psd_single_sided, telegraph_traces
+from .allan import allan_variance, avar_exponential, avar_white
 from .budgets import SensorBudget
 from .click import (click_monte_carlo, click_template, matched_Tc,
                     matched_recipe)
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
@@ -38,6 +39,7 @@ __all__ = [
     "continuum_share", "ShortJunction", "FiniteLJunction",
     "channel_generator", "sigma_spectrum", "tau_activated",
     "noneq_penalty", "telegraph_traces", "psd_single_sided",
+    "allan_variance", "avar_exponential", "avar_white",
     "SensorBudget",
     "matched_Tc", "matched_recipe", "click_template",
     "click_monte_carlo",
