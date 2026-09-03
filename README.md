@@ -35,7 +35,7 @@ posterior = model.posterior(y_trace)       # P(occupied) per sample
 
 ## Status
 
-v0.2.0 (alpha). Implemented and tested:
+v0.4.0 (alpha). Implemented and tested:
 
 - exact finite-length ABS solver from the closed-form secular equation
   cos(2 arccos(E/Delta) - eta(E)) = 1 - tau + tau cos(phi), with the
