@@ -31,7 +31,9 @@ from .budgets import SensorBudget
 from .click import (click_monte_carlo, click_template, matched_Tc,
                     matched_recipe)
 
-__version__ = "0.3.0"
+from .decode import TelegraphHMM, fit_hmm
+
+__version__ = "0.4.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
