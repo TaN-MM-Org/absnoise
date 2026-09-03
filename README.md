@@ -12,6 +12,27 @@ Andreev levels fluctuates even in equilibrium, and that fluctuation, not
 the readout, is what ultimately limits a proximity Josephson thermal
 detector.
 
+## Decoding occupation from readout traces (new in v0.4)
+
+The `decode` module solves the inverse problem the rest of the package
+predicts: given a noisy sampled readout of the two-state occupation, a
+hidden-Markov decoder returns the exact posterior occupation probability
+at every sample (forward-backward), the most probable state path
+(Viterbi), and maximum-likelihood estimates of f, tauA and the readout
+levels from the trace alone (Baum-Welch EM, whose log-likelihood is
+provably non-decreasing, a property the tests check). Validated against
+the package's own telegraph Monte Carlo: state recovery above 99.9
+percent at high SNR, posterior confidence matching realized accuracy to
+better than a percent, and rate estimates landing within the
+transition-count statistical error of the ground truth.
+
+```python
+from absnoise.decode import TelegraphHMM, fit_hmm
+model, logliks = fit_hmm(y_trace)          # EM from the raw trace
+f_hat, tau_hat = model.rates(dt)
+posterior = model.posterior(y_trace)       # P(occupied) per sample
+```
+
 ## Status
 
 v0.2.0 (alpha). Implemented and tested:
