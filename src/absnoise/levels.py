@@ -379,3 +379,44 @@ def continuum_share(recipe, T, n_phi=81, phi0=np.pi / 2):
     bm, cm = I_parts(T - dT)
     db, dc = (bp - bm) / (2 * dT), (cp - cm) / (2 * dT)
     return dict(share_I=c0 / (b0 + c0), share_dIdT=dc / (db + dc))
+
+
+def occupation_heat_capacities(recipe, T, phi0=np.pi / 2, n_phi=81,
+                               dT_frac=1e-3, n_E=3000):
+    """Bound and continuum contributions to the occupation-channel heat
+    capacity at fixed phase, C = -T d^2F/dT^2 with the gap frozen --
+    the thermodynamic weight of occupation fluctuations alone, with
+    Delta(T) held at its value at T so that only the occupations vary.
+
+    The bound part of this quantity is *identically* the level sum
+    C_A = 2 sum_levels E^2 / (4 kB T^2 cosh^2(E/2kBT)) used by the
+    Cauchy-Schwarz temperature bound: differentiating
+    F_b = -2 kB T sum log 2cosh(E/2kBT) twice at fixed E gives exactly
+    that sum. The test suite asserts the two independent code paths
+    agree, rather than trusting the algebra. The continuum part is the
+    same second derivative applied to the validated scattering-phase
+    continuum free energy (the Krein spectral-shift contribution of
+    the junction to the quasiparticle heat capacity) -- the piece the
+    bound-only occupation sums neglect, now quantified instead of
+    waved at. It vanishes identically in the short-junction limit,
+    where the continuum carries no phase dependence (asserted).
+
+    Returns dict(C_bound, C_cont, share_CA) in J/K; share_CA is the
+    continuum fraction of the total.
+    """
+    m = JunctionModel(recipe, n_phi=n_phi)
+    m.Delta = float(gap_bcs(T, recipe.Tc, recipe.Delta))
+    m.compute_levels()
+    j = int(np.argmin(np.abs(m.phis - phi0)))
+    dT = dT_frac * T
+    vals_b, vals_c = [], []
+    for TT in (T - dT, T, T + dT):
+        Fb, Fc = free_energy_components(m, TT, n_E=n_E)
+        vals_b.append(Fb[j])
+        vals_c.append(Fc[j])
+    # x2: valley degeneracy, applied externally to the free-energy
+    # components exactly as in `continuum_share`
+    Cb = -2.0 * T * (vals_b[0] - 2.0 * vals_b[1] + vals_b[2]) / dT ** 2
+    Cc = -2.0 * T * (vals_c[0] - 2.0 * vals_c[1] + vals_c[2]) / dT ** 2
+    return dict(C_bound=float(Cb), C_cont=float(Cc),
+                share_CA=float(Cc / (Cb + Cc)))
