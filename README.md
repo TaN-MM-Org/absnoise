@@ -35,7 +35,7 @@ posterior = model.posterior(y_trace)       # P(occupied) per sample
 
 ## Status
 
-v0.4.0 (alpha). Implemented and tested:
+v0.5.0 (alpha). Implemented and tested (56 tests, Python 3.9-3.13):
 
 - exact finite-length ABS solver from the closed-form secular equation
   cos(2 arccos(E/Delta) - eta(E)) = 1 - tau + tau cos(phi), with the
@@ -89,12 +89,37 @@ in both exchange scenarios; photon-versus-dark ordering of the click
 Monte Carlo; and the exact closed-form round trip of the self-heating
 steady state.
 
-Not yet implemented, stated plainly because they matter physically:
-continuum contributions to the occupation channel are neglected (bound
-levels dominate for L < xi; the largest L/xi in the recipe set is
-0.43; `continuum_share` quantifies the supercurrent-channel analog),
-and phonon-bath heating by the substrate is treated only through the
-steady-state electron temperature, not dynamically.
+Both previously stated limitations are now closed (v0.5):
+
+- **Continuum occupation channel quantified**
+  (`occupation_heat_capacities`): the continuum (E > Delta)
+  contribution to the occupation-channel heat capacity, computed as
+  -T d2F/dT2 at frozen gap from the validated scattering-phase free
+  energy -- the Krein spectral-shift piece the bound-only sums
+  neglect. Cross-validated, not asserted: the bound part of the same
+  derivative reproduces the level-sum C_A of `andreev_sums` through a
+  completely independent code path (< 1e-5 relative), and the
+  continuum part vanishes identically at L = 0. For the recipe set at
+  0.3 Tc the continuum share is at the percent level, which is now a
+  number in a test rather than a hope in a docstring.
+- **Dynamic phonon bath** (`two_temperature_click`): the coupled
+  electron/local-phonon temperature dynamics with a finite phonon
+  heat capacity and a boundary escape law, integrated with
+  stiffness-aware RK4. No phonon parameters are shipped -- c_ph,
+  kappa_pb and delta_pb are measurements of a real stack, and calls
+  without them raise. Anchors: T0 is an exact fixed point (preserved
+  bitwise), the isolated flow conserves gamma Te^2/2 + c_ph Tp^4/4
+  and equilibrates to the independently computed quartic-root common
+  temperature (< 1e-5), and the infinite-bath limit reproduces
+  `click_template` exactly where it should.
+
+Deliberate scope, designed out with reasons: the continuum occupation
+*noise* (as opposed to its thermodynamic weight) would need the
+kinetics of continuum quasiparticles -- a correlation-time model with
+material parameters this package refuses to invent; and the phonon
+subsystem is one lumped temperature, not a spectral phonon
+distribution, because a nonthermal phonon model has no cited
+parameters at these device scales either.
 
 ## Install and use
 
