@@ -34,8 +34,9 @@ from .click import (click_monte_carlo, click_template, matched_Tc,
 from .twotemp import total_energy, two_temperature_click
 
 from .decode import TelegraphHMM, fit_hmm
+from .icfit import IcFit, fit_ic_curve, ic_model
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
@@ -46,6 +47,7 @@ __all__ = [
     "noneq_penalty", "telegraph_traces", "psd_single_sided",
     "allan_variance", "avar_exponential", "avar_white",
     "SensorBudget",
+    "IcFit", "fit_ic_curve", "ic_model",
     "matched_Tc", "matched_recipe", "click_template",
     "click_monte_carlo", "two_temperature_click", "total_energy",
     "HBAR", "KB", "E_CHARGE", "H_PLANCK", "PHI0", "EPS0", "V_F",
