@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0 (2026-09-10)
+
+### Added
+
+- `fit_ic_curve` / `IcFit` / `ic_model`: junction characterization
+  from a measured Ic(T) curve -- bounded nonlinear least squares of
+  the package's short-junction ensemble for (Ic0, Tc, tau), exact
+  known-noise covariance and chi-square check when sigma_Ic is given
+  (residual-variance covariance, requiring n >= 5, otherwise), a
+  weak-constraint warning when the data never leave the
+  low-temperature plateau, and `IcFit.to_recipe` to package the fit
+  (plus the user's measured geometry) as a `Recipe` for the rest of
+  the pipeline.
+- Anchors: closed-form T = 0 maximizing phase
+  sin^2(phi*/2) = (1 - sqrt(1 - tau))/tau against a dense grid
+  maximum; the fit's forward model against the independent
+  `ShortJunction.Ic` implementation to machine precision on every
+  shipped recipe; exact noise-free recovery; Monte-Carlo scatter
+  compatible with reported sigmas; refusals on malformed and
+  unconstraining data; fitted-recipe round trip through the
+  calibrated device pipeline.
+
 ## 0.5.0 (2026-09-05)
 
 Closes both limitations stated in v0.4's "not yet implemented"

@@ -35,7 +35,7 @@ posterior = model.posterior(y_trace)       # P(occupied) per sample
 
 ## Status
 
-v0.5.0 (alpha). Implemented and tested (56 tests, Python 3.9-3.13):
+v0.6.0 (alpha). Implemented and tested (62 tests, Python 3.9-3.13):
 
 - exact finite-length ABS solver from the closed-form secular equation
   cos(2 arccos(E/Delta) - eta(E)) = 1 - tau + tau cos(phi), with the
@@ -120,6 +120,41 @@ material parameters this package refuses to invent; and the phonon
 subsystem is one lumped temperature, not a spectral phonon
 distribution, because a nonthermal phonon model has no cited
 parameters at these device scales either.
+
+## Fit your own junction from Ic(T) (new in v0.6)
+
+The shipped recipes are Jung et al.'s junctions; yours needs its own
+(Tc*, tau, Ic0), and the standard characterization measurement --
+critical current versus temperature -- determines exactly those.
+`fit_ic_curve` fits the package's own short-junction ensemble to a
+measured Ic(T) curve by bounded nonlinear least squares: Ic0 absorbs
+channel count and series factors, Tc sets the gap scale, and tau is
+identified by the *shape* of the suppression (transparent junctions
+keep their supercurrent to higher T/Tc than tunnel junctions). With
+measurement sigmas the parameter covariance is the exact known-noise
+result and a chi-square consistency check is returned; a curve that
+never leaves the low-temperature plateau triggers a warning that Tc
+and tau are weakly determined, instead of a well-formatted result
+implying a well-determined one. `IcFit.to_recipe` packages the fit
+with your measured geometry as a `Recipe`, so every budget in the
+package applies to your junction directly.
+
+```python
+import absnoise as ab
+fit = ab.fit_ic_curve(T_data, Ic_data, sigma_Ic=sig)      # (Ic0, Tc, tau)
+rec = fit.to_recipe(name="my stack", label="mine", xi=5e-6,
+                    L=0.2e-6, W=2e-6, Vbg=30.0, Rn=50.0)
+sj = ab.ShortJunction(rec); sj.calibrate()
+```
+
+Anchors, asserted in the tests rather than stated: the closed-form
+zero-temperature maximizing phase (sin^2(phi*/2) = (1 - sqrt(1-tau))
+/ tau) against a dense grid maximum to 1e-8; the fit's forward model
+against the package's independent `ShortJunction.Ic` implementation to
+machine precision on every shipped recipe; exact noise-free parameter
+recovery; Monte-Carlo scatter compatible with the reported sigmas; and
+the fitted-recipe round trip back through the calibrated device
+pipeline.
 
 ## Install and use
 
