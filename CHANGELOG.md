@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.7.0 (2026-09-12)
+
+From-the-instrument release: the third standard data product of these
+experiments -- a measured noise spectrum -- gets its inverse tool,
+and measurement files enter through documented contracts.
+
+### Added
+
+- `fit_telegraph_psd` / `TelegraphPSDFit` / `telegraph_psd_model`:
+  extraction of the occupation-noise parameters (plateau S0,
+  correlation time tau, white floor) from a measured single-sided
+  PSD, fitted in log space (the variance-stabilizing choice for
+  averaged periodograms, stated rather than hidden), with
+  uncertainties and an optional chi-square check when the number of
+  averages is given. Identifiability enforced, not hoped for: a band
+  that never sees the knee -- flat spectra, or a fitted knee outside
+  the measured band -- is refused with an explanation, because such
+  a band cannot determine tau. Anchors: noise-free recovery to 1e-6;
+  the fitted Lorentzian's exact integral S0/(4 tau) matching the
+  generating telegraph Monte-Carlo trace variance (Parseval, two
+  independent code paths); the fitted tau and plateau matching the
+  generating values within statistics; both out-of-band refusals.
+- `load_ic_csv` / `save_ic_csv` (header `T_K,Ic_A[,sigma_Ic_A]`) and
+  `load_trace_csv` / `save_trace_csv` (header `t_s,y`, uniform grid
+  enforced): documented plain-text contracts for the inputs of
+  `fit_ic_curve`, `fit_hmm`, `psd_single_sided` and
+  `allan_variance`, with exact round trips and refusals.
+- `validate_ic_data`: structural problems raise; unit-plausibility
+  findings (temperatures that look like millikelvin entered as
+  kelvin, currents that look like microamps entered as amps) are
+  returned as flags for the user to judge -- never silently
+  rescaled. Thresholds are explicit keyword parameters.
+
+### Changed
+
+- README rewritten: organized by what the package does (predict a
+  budget / analyze your measurements / the physics engine) rather
+  than by release history, in plainer language, same facts.
+
 ## 0.6.0 (2026-09-10)
 
 ### Added
