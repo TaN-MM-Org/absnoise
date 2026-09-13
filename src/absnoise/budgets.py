@@ -111,6 +111,61 @@ class SensorBudget:
         integ = 4.0 * np.trapezoid(Y**2 / S_tot, f)
         return 1.0 / np.sqrt(integ)
 
+    def nep_spectrum(self, T, tauA, freqs, S_ro_y=0.0, which="L"):
+        """Noise-equivalent power spectrum NEP(f), the bolometric
+        figure of merit every detector paper quotes (new in v0.8).
+
+        Each noise channel is referred to the input power through the
+        full signal chain dy/dP(f) = R (1/G) H_th(f) H_A(f) -- the
+        same chain `energy_resolution` uses -- giving closed forms:
+
+         * phonon TFN:  NEP_ph^2(f) = 4 kB T^2 G_ep, exactly flat at
+           every frequency: the Lorentzian rolloff of the temperature
+           fluctuations cancels against the responsivity rolloff
+           (J. C. Mather, Appl. Opt. 21, 1125 (1982), the classic
+           nonequilibrium-bolometer result).
+         * Andreev occupation noise: NEP_A^2(f) =
+           S_T_A(0) G^2 (1 + (2 pi f tau_th)^2) with S_T_A(0) =
+           S0 tauA / R_occ^2 -- the occupation Lorentzian cancels
+           exactly against the occupation lag in the response,
+           leaving only the thermal rolloff to undo.
+         * readout imprecision: NEP_ro^2(f) = S_ro_y G^2
+           (1 + (2 pi f tau_th)^2)(1 + (2 pi f tauA)^2) / R^2.
+
+        Returns dict(total, andreev, phonon, readout), each in
+        W/sqrt(Hz). Anchors asserted in the tests rather than stated:
+        the phonon channel is flat and equals Mather's 4 kB T^2 G to
+        machine precision; the matched-filter identity
+        sigma_E = [4 integral df / NEP_total^2]^(-1/2) reproduces
+        `energy_resolution` (two independent code paths); the DC
+        crossover NEP_A(0) > NEP_ph(0) is exactly the documented
+        tauA/C_A > tau_th/C_e criterion when the occupation bound is
+        saturated; and the Andreev channel's rise is exactly
+        sqrt(1 + (2 pi f tau_th)^2).
+        """
+        f = np.asarray(freqs, dtype=float)
+        if np.any(f < 0) or not np.all(np.isfinite(f)):
+            raise ValueError("frequencies must be finite and >= 0")
+        Ce, G = self.Ce(T), self.Gep(T)
+        tth = Ce / G
+        phi = 1e-4 if which == "L" else self.sj.phi_max(T)
+        s = self.sj.andreev_sums(phi, T, which)
+        I1 = self.sj.dIdphi0(T)
+        p = self.participation(T)
+        conv = (p / 2.0) / I1
+        R = s["R_occ"] * conv
+        w = 2 * np.pi * f
+        th2 = 1.0 + (w * tth) ** 2
+        A2 = 1.0 + (w * tauA) ** 2
+        ST_A0 = s["S0_over_tau"] * tauA / s["R_occ"] ** 2
+        nep2_ph = np.full_like(f, 4.0 * KB * T ** 2 * G)
+        nep2_A = ST_A0 * G ** 2 * th2
+        nep2_ro = float(S_ro_y) * G ** 2 * th2 * A2 / R ** 2
+        total = np.sqrt(nep2_ph + nep2_A + nep2_ro)
+        return dict(total=total, andreev=np.sqrt(nep2_A),
+                    phonon=np.sqrt(nep2_ph),
+                    readout=np.sqrt(nep2_ro + np.zeros_like(f)))
+
     def energy_resolution_analytic_A(self, T, tauA, which="L"):
         """Closed form for the Andreev-noise-only matched-filter
         resolution (J):  sigma_E^2 = Ce^2 S_T(0) / tau_th, with

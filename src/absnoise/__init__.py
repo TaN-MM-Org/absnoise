@@ -39,7 +39,7 @@ from .psdfit import TelegraphPSDFit, fit_telegraph_psd, telegraph_psd_model
 from .data import (load_ic_csv, load_trace_csv, save_ic_csv,
                    save_trace_csv, validate_ic_data)
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
