@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.8.0 (2026-09-13)
+
+Physics upgrade: the noise-equivalent power spectrum -- the
+bolometric figure of merit every detector paper quotes -- with each
+channel referred to the input power through the full signal chain in
+closed form.
+
+### Added
+
+- `SensorBudget.nep_spectrum`: frequency-resolved NEP of the Andreev
+  occupation channel, the phonon thermal-fluctuation channel and the
+  readout imprecision, in W/sqrt(Hz). Two exact cancellations do the
+  work: the phonon channel is EXACTLY flat at Mather's classic
+  4 kB T^2 G_ep (Appl. Opt. 21, 1125 (1982)) because the temperature-
+  fluctuation rolloff cancels against the responsivity rolloff, and
+  the occupation channel's Lorentzian cancels against the occupation
+  lag, leaving only the thermal rolloff to undo.
+
+### Anchors (asserted in `tests/test_nep.py`, not stated)
+
+- The phonon NEP equals Mather's closed form to 1e-14 at every
+  frequency.
+- The matched-filter identity sigma_E = [4 int df / NEP^2]^(-1/2)
+  built from the NEP closed forms reproduces the package's
+  independent `energy_resolution` signal-chain integral to 1e-10,
+  with and without a readout floor -- two code paths through the
+  same physics.
+- The DC crossover NEP_A(0) vs NEP_ph(0) is exactly the
+  tauA/C_A vs tau_th/C_e criterion the budget docstring has always
+  stated, and scales exactly linearly in tauA.
+- The occupation channel's shape is exactly
+  sqrt(1 + (2 pi f tau_th)^2), and the readout channel rises faster
+  (it carries both rolloffs).
+
 ## 0.7.0 (2026-09-12)
 
 From-the-instrument release: the third standard data product of these

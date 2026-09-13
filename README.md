@@ -90,7 +90,11 @@ defining integrals and Monte Carlo.
   occupation heat capacity, cross-validated through an independent
   code path.
 - Detector budgets: phonon thermal-fluctuation noise, resonator
-  frequency-noise spectra, matched-filter energy resolution; the
+  frequency-noise spectra, matched-filter energy resolution, and
+  (new in v0.8) the frequency-resolved noise-equivalent power
+  NEP(f) per channel in closed form -- the phonon channel exactly
+  flat at Mather's 4 kB T^2 G (Appl. Opt. 1982), the occupation
+  channel's Lorentzian cancelling exactly against its own lag; the
   matched-level design condition, the nonlinear single-photon click
   response, and a two-temperature (electron + local phonon) click
   model whose phonon parameters must be measured, not invented.
@@ -107,7 +111,7 @@ they are measurements of a real device, and calls without them raise.
 
 ## How it is checked
 
-68 tests (Python 3.9-3.13, run in CI on every push), every physics
+72 tests (Python 3.9-3.13, run in CI on every push), every physics
 claim anchored to a closed form, an exact identity, or two
 independent code paths -- never a stored number. Highlights: the
 short-junction limit to 1e-12 and Kulik levels to 1e-10; the BCS
