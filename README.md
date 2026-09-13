@@ -39,7 +39,7 @@ sigE = budget.energy_resolution(T, tauA)
 Units are SI throughout; PSDs are single-sided with the convention
 var(t-average) = S(0)/(2t), validated by Monte Carlo in the tests.
 
-## Analyze your own measurements (v0.4-v0.7)
+## Analyze your own measurements
 
 The three standard data products of these experiments each have a
 dedicated inverse tool, and the files enter through documented
