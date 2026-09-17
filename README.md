@@ -73,6 +73,35 @@ stability question -- how long is it worth averaging -- with the
 closed form this package's own noise obeys, checked against its
 defining integrals and Monte Carlo.
 
+## Plan the measurements those fits need
+
+`fit_ic_curve` and `fit_telegraph_psd` work on data that already
+exist; the `lab` tools answer the planning questions that come first:
+
+```python
+from absnoise import (plan_ic_measurement, design_ic_temperatures,
+                      psd_band_for_tau)
+
+# Would this cooldown determine (Ic0, Tc, tau), and how well?
+plan = plan_ic_measurement(T_K, sigma_Ic_A=20e-9, Ic0=1.1e-6,
+                           Tc=1.5, tau=0.8)
+print(plan["sigma"], plan["covers_tc_knee"])
+
+# Which reachable temperatures are worth the fridge time?
+pick = design_ic_temperatures(candidates_K, 6, 20e-9, 1.1e-6, 1.5, 0.8)
+
+# Which frequency band can determine the correlation time at all?
+f_lo, f_hi, f_knee = psd_band_for_tau(tau_expected_s=3e-4)
+```
+
+The planned error bars are the same (J^T W J)^-1 matrix the fit
+reports, computed through the package's own `ic_model` before any
+data exist; the fit's low-temperature leverage warning (a run that
+never approaches 0.3 Tc barely feels Tc) reappears in the plan as
+`covers_tc_knee`; and the PSD band planner applies, in advance,
+exactly the knee-visibility rules `fit_telegraph_psd` enforces after
+the fact -- a band it emits is one the fit will accept.
+
 ## What is inside the physics engine
 
 - The exact finite-length Andreev spectrum from its closed-form
@@ -111,7 +140,7 @@ they are measurements of a real device, and calls without them raise.
 
 ## How it is checked
 
-72 tests (Python 3.9-3.13, run in CI on every push), every physics
+78 tests (Python 3.9-3.13, run in CI on every push), every physics
 claim anchored to a closed form, an exact identity, or two
 independent code paths -- never a stored number. Highlights: the
 short-junction limit to 1e-12 and Kulik levels to 1e-10; the BCS

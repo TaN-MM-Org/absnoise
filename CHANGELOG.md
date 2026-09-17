@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.0 (2026-09-17)
+
+Lab adaptability: the measurements planned before the fridge time is
+spent.
+
+- `lab.plan_ic_measurement`: predicted (Ic0, Tc, tau) error bars for
+  a planned Ic(T) run -- the same (J^T W J)^-1 matrix `fit_ic_curve`
+  reports, through the package's own `ic_model`, with a
+  scale-invariant identifiability verdict and the fit's low-
+  temperature leverage warning surfaced in advance as
+  `covers_tc_knee`.
+- `lab.design_ic_temperatures`: greedy D-optimal choice of which
+  reachable temperatures to measure (Pukelsheim, Optimal Design of
+  Experiments, SIAM (2006)).
+- `lab.psd_band_for_tau`: a frequency band satisfying, in advance,
+  exactly the knee-visibility rules `fit_telegraph_psd` enforces
+  after the fact.
+- Anchors: planned sigmas match the fit's on the same design and 250
+  seeded Monte-Carlo cooldowns match the planned Tc scatter; the
+  below-0.3-Tc design flagged and its Tc error bar an order of
+  magnitude worse; the greedy design never loses to a random subset;
+  the band planner cross-validated against the fit in both
+  directions (emitted bands accepted with the generating tau
+  recovered, knee-blind bands refused).
+
 ## 0.8.0 (2026-09-13)
 
 Physics upgrade: the noise-equivalent power spectrum -- the
