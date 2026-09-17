@@ -34,12 +34,14 @@ from .click import (click_monte_carlo, click_template, matched_Tc,
 from .twotemp import total_energy, two_temperature_click
 
 from .decode import TelegraphHMM, fit_hmm
+from .lab import (design_ic_temperatures, plan_ic_measurement,
+                  psd_band_for_tau)
 from .icfit import IcFit, fit_ic_curve, ic_model
 from .psdfit import TelegraphPSDFit, fit_telegraph_psd, telegraph_psd_model
 from .data import (load_ic_csv, load_trace_csv, save_ic_csv,
                    save_trace_csv, validate_ic_data)
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
@@ -57,4 +59,6 @@ __all__ = [
     "matched_Tc", "matched_recipe", "click_template",
     "click_monte_carlo", "two_temperature_click", "total_energy",
     "HBAR", "KB", "E_CHARGE", "H_PLANCK", "PHI0", "EPS0", "V_F",
+    "plan_ic_measurement", "design_ic_temperatures",
+    "psd_band_for_tau",
 ]
