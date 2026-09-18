@@ -25,7 +25,8 @@ import numpy as np
 from .icfit import ic_model
 
 __all__ = ["plan_ic_measurement", "design_ic_temperatures",
-           "psd_band_for_tau"]
+           "psd_band_for_tau", "plan_psd_measurement",
+           "averages_for_tau"]
 
 _COND_MAX = 1e10
 _NAMES = ("Ic0", "Tc", "tau")
@@ -204,3 +205,108 @@ def psd_band_for_tau(tau_expected_s, margin=4.0):
                          "enforces")
     f_c = 1.0 / (2.0 * np.pi * float(tau_expected_s))
     return f_c / m, f_c * m, f_c
+
+
+def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor):
+    """d log(model) / d log(parameter) at the working point -- the
+    same log-space parameterization `fit_telegraph_psd` uses."""
+    from .psdfit import telegraph_psd_model
+    f = np.asarray(f, dtype=float).ravel()
+    p0 = [np.log(S0), np.log(tau_s)] \
+        + ([np.log(max(floor, 1e-300))] if fit_floor else [])
+
+    def logmodel(p):
+        s0, tau = np.exp(p[0]), np.exp(p[1])
+        fl = np.exp(p[2]) if fit_floor else floor
+        return np.log(telegraph_psd_model(f, s0, tau, fl))
+
+    jac = np.empty((f.size, len(p0)))
+    for j in range(len(p0)):
+        h = 1e-6
+        pp, pm = list(p0), list(p0)
+        pp[j] += h
+        pm[j] -= h
+        jac[:, j] = (logmodel(pp) - logmodel(pm)) / (2.0 * h)
+    return jac
+
+
+def plan_psd_measurement(f_hz, n_avg, S0, tau_s, floor=0.0,
+                         fit_floor=True):
+    """Predicted PSD-fit error bars for a planned averaging depth.
+
+    f_hz : the frequency bins you will record (must satisfy the same
+        knee-visibility rules `fit_telegraph_psd` enforces -- checked
+        here in advance, with the same explanations).
+    n_avg : number of independent periodogram averages per bin.
+    S0, tau_s, floor : your expected spectrum (plateau, correlation
+        time, white floor -- the working point).
+
+    Returns dict(sigma, identifiable, condition_number): `sigma` maps
+    S0 (input PSD units), tau_s (s) and -- when fitted -- floor to
+    the error bars the fit would report at this averaging depth. The
+    exact scaling is 1/sqrt(n_avg): the same matrix at any depth.
+    """
+    _check_psd_point(f_hz, S0, tau_s, floor)
+    n_avg = int(n_avg)
+    if n_avg < 1:
+        raise ValueError("n_avg must be >= 1")
+    f = np.asarray(f_hz, dtype=float).ravel()
+    jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor)
+    fisher = jac.T @ jac * float(n_avg)
+    names = ["S0", "tau_s"] + (["floor"] if fit_floor else [])
+    identifiable, cond, sig_frac = _invert_information(fisher, names)
+    sigma = None
+    if identifiable:
+        vals = {"S0": S0, "tau_s": tau_s, "floor": floor}
+        sigma = {k: sig_frac[k] * vals[k] for k in names}
+    return {"sigma": sigma, "identifiable": identifiable,
+            "condition_number": cond}
+
+
+def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
+                     fit_floor=True):
+    """How many periodogram averages does a target tau error bar
+    cost? Exact closed form: every error bar scales as
+    1/sqrt(n_avg), so n_avg = ceil((sigma_at_1 / target)^2).
+
+    Returns (n_avg, plan) with `plan` the `plan_psd_measurement`
+    result at the returned depth. Refuses bands the fit itself would
+    refuse, with the same explanation.
+    """
+    t = float(target_sigma_tau_s)
+    if not (np.isfinite(t) and t > 0.0):
+        raise ValueError("target_sigma_tau_s must be positive (s)")
+    base = plan_psd_measurement(f_hz, 1, S0, tau_s, floor, fit_floor)
+    if not base["identifiable"]:
+        raise ValueError("the band cannot determine the parameters "
+                         "at any averaging depth; change the band "
+                         "(see psd_band_for_tau)")
+    n = max(1, int(np.ceil((base["sigma"]["tau_s"] / t) ** 2)))
+    return n, plan_psd_measurement(f_hz, n, S0, tau_s, floor,
+                                   fit_floor)
+
+
+def _check_psd_point(f_hz, S0, tau_s, floor):
+    from .psdfit import telegraph_psd_model
+    f = np.asarray(f_hz, dtype=float).ravel()
+    if f.size < 8 or np.any(f <= 0.0) or not np.all(np.isfinite(f)):
+        raise ValueError("need >= 8 positive, finite frequencies "
+                         "(the fit's own rule)")
+    if not (np.isfinite(S0) and S0 > 0.0 and np.isfinite(tau_s)
+            and tau_s > 0.0 and np.isfinite(floor) and floor >= 0.0):
+        raise ValueError("S0 and tau_s must be positive and floor "
+                         ">= 0")
+    f_knee = 1.0 / (2.0 * np.pi * tau_s)
+    if f_knee < 2.0 * f.min() or f_knee > 0.5 * f.max():
+        raise ValueError(
+            f"the expected knee {f_knee:.3g} Hz lies outside the "
+            f"planned band [{f.min():.3g}, {f.max():.3g}] Hz with "
+            "the fit's factor-2 margin: `fit_telegraph_psd` would "
+            "refuse this measurement, so it is refused here, before "
+            "the fridge time (see psd_band_for_tau)")
+    S = telegraph_psd_model(f, S0, tau_s, floor)
+    if float(S.max() / S.min()) < 4.0:
+        raise ValueError(
+            "the expected spectrum varies by less than a factor of 4 "
+            "across the band: the fit's knee-visibility rule would "
+            "refuse it, so it is refused here, in advance")
