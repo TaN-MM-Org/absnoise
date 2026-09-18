@@ -102,6 +102,15 @@ never approaches 0.3 Tc barely feels Tc) reappears in the plan as
 exactly the knee-visibility rules `fit_telegraph_psd` enforces after
 the fact -- a band it emits is one the fit will accept.
 
+The PSD planner also answers the averaging question in closed form:
+`plan_psd_measurement` predicts the (S0, tau, floor) error bars of a
+planned averaging depth -- the same log-space matrix
+`fit_telegraph_psd` reports, before any spectrum exists -- and
+`averages_for_tau` inverts the exact 1/sqrt(n_avg) scaling into the
+number of periodogram averages a target tau error bar costs. Both
+refuse, in advance and with the same explanations, exactly the
+bands the fit refuses after the fact.
+
 ## What is inside the physics engine
 
 - The exact finite-length Andreev spectrum from its closed-form
@@ -140,7 +149,7 @@ they are measurements of a real device, and calls without them raise.
 
 ## How it is checked
 
-78 tests (Python 3.9-3.13, run in CI on every push), every physics
+83 tests (Python 3.9-3.14, run in CI on every push), every physics
 claim anchored to a closed form, an exact identity, or two
 independent code paths -- never a stored number. Highlights: the
 short-junction limit to 1e-12 and Kulik levels to 1e-10; the BCS
