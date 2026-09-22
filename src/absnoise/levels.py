@@ -30,6 +30,7 @@ import numpy as np
 from scipy.optimize import brentq
 
 from .constants import HBAR, KB, E_CHARGE, V_F
+from ._compat import trapezoid
 from .materials import Recipe, carrier_density, n_modes
 
 COS_TH_MIN = 0.05   # discard grazing modes (negligible current carriers)
@@ -102,8 +103,8 @@ def continuum_free_energy(phi, tau, c, Delta, T, n_E=800, Emax_fac=60.0):
     cos(sigma) = R, so |arg D| < pi (no winding). The free energy is
         F_cont = (1/pi) int_Delta^inf tanh(E/2kBT) arg D(E) dE ,
     with the sign fixed by continuity of F_bound + F_cont across the
-    phase where a bound state exits into the continuum (verified in the
-    testbench).
+    phase where a bound state exits into the continuum (this package's
+    test suite does not assert that continuity).
     """
     E = Delta * (1.0 + np.logspace(-9, np.log10(Emax_fac), n_E))
     gam = np.arccosh(E / Delta)
@@ -115,7 +116,7 @@ def continuum_free_energy(phi, tau, c, Delta, T, n_E=800, Emax_fac=60.0):
     x = Delta / (2.0 * KB * T)
     log2cosh_D = x + np.log1p(np.exp(-2.0 * x))
     boundary = (2.0 * KB * T / np.pi) * log2cosh_D * delta_ph[0]
-    integral = (1.0 / np.pi) * np.trapezoid(
+    integral = (1.0 / np.pi) * trapezoid(
         np.tanh(E / (2.0 * KB * T)) * delta_ph, E)
     return boundary + integral
 
@@ -154,8 +155,8 @@ class JunctionModel:
         Bound-state part from the root table; continuum part from the
         scattering phase delta(E) = -arg D(E) including the threshold
         boundary term, cached per (mode, phi) and contracted against the
-        tanh weight of each temperature (sign convention validated by
-        continuity across bound-state exit in the testbench).
+        tanh weight of each temperature (sign convention: see
+        `continuum_free_energy`).
         """
         if self._levels is None:
             self.compute_levels()
@@ -183,8 +184,8 @@ class JunctionModel:
                 dph = continuum_delta(p, self.tau, self.cs[m],
                                       self.Delta, Efac)
                 F[:, j] += (l2cD * dph[0] / np.pi
-                            + np.trapezoid(tanhw * dph[None, :], E,
-                                           axis=1) / np.pi)
+                            + trapezoid(tanhw * dph[None, :], E,
+                                        axis=1) / np.pi)
         return F
 
     def free_energy(self, T):
@@ -347,7 +348,7 @@ def free_energy_components(model, T, n_E=3000):
             dph = continuum_delta(p, model.tau, model.cs[m],
                                   model.Delta, Efac)
             Fc[j] += (l2cD * dph[0] / np.pi
-                      + np.trapezoid(tanhw * dph, E) / np.pi)
+                      + trapezoid(tanhw * dph, E) / np.pi)
     return Fb, Fc
 
 

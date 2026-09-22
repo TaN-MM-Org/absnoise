@@ -26,7 +26,8 @@ band (below 2 f_min or above f_max / 2), instead of returning one of
 a continuum of minimizers with a well-formatted covariance.
 
 Anchors asserted in the tests rather than stated: noise-free synthetic
-spectra return the generating (S0, tau, floor) to better than 1e-6;
+spectra return the generating S0 and tau to better than 1e-6 and the
+floor to better than 1e-4;
 the total occupation variance recovered from the fitted Lorentzian's
 exact integral, S0 / (4 tau), matches the variance of the generating
 telegraph Monte-Carlo traces (Parseval, two independent code paths);
@@ -112,6 +113,10 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
             "S0/floor split) cannot be determined from this band. "
             "Extend the band past the knee, or determine tau from a "
             "resolved time trace with absnoise.decode")
+    if n_avg is not None and not (np.isfinite(float(n_avg))
+                                  and float(n_avg) >= 1.0):
+        raise ValueError("n_avg must be >= 1 (the number of averaged "
+                         "periodograms behind each bin)")
     logS = np.log(S)
 
     # starting guesses from the data themselves

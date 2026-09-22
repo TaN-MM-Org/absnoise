@@ -12,7 +12,9 @@ occupation-noise model.
        tau_eff := S_sigma(0) / (4 var sigma)
    can only decrease. The Cauchy-Schwarz bound therefore holds with
    tau_A -> tau_eff per level, and the single-quasiparticle value is the
-   worst case (verified numerically and by Monte Carlo in the tests).
+   worst case (checked numerically in the tests: tau_eff does not rise
+   as the pair rate Gp grows; there is no Monte Carlo of the four-state
+   channel).
 
 2. Energy-dependent activated exchange, tau(E) = tau0 exp[(Delta-E)/kBT]
    (removal of a trapped quasiparticle requires bridging Delta - E;

@@ -30,8 +30,8 @@ trusted:
   bitwise: every RHS evaluates to exactly zero).
 * With kappa_pb = 0 (no escape) the total energy
   U = gamma T_e^2 / 2 + c_ph T_p^4 / 4 is a conserved quantity of the
-  flow; the RK4 drift is small and falls as dt^4 (order verified by
-  halving dt).
+  flow; the tests assert the RK4 drift stays below 1e-5 of U (the
+  order of convergence is not tested).
 * In the infinite-bath limit (large phonon heat capacity with a
   finite escape) the phonons pin to T0 and the electron and occupation
   trajectories reproduce the single-temperature `click_template`

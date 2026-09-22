@@ -20,6 +20,7 @@ so the fractional-frequency noise PSD is
 import numpy as np
 
 from .constants import KB, HBAR, E_CHARGE, PHI0, H_PLANCK
+from ._compat import trapezoid
 from .materials import (Recipe, carrier_density, heat_capacity, gth,
                        ep_power)
 from .shortjunction import ShortJunction
@@ -86,13 +87,16 @@ class SensorBudget:
         -> occupations respond with lag tauA -> fractional frequency
         y(t). Noise: Andreev Lorentzian + phonon TFN (filtered by the
         same occupation lag) + white readout floor S_ro_y (1/Hz).
-        sigma_E^-2 = 2 int_0^inf df |Y(f)|^2 / S_y(f), Y = signal
+        sigma_E^-2 = 4 int_0^inf df |Y(f)|^2 / S_y(f), Y = signal
         transform per unit deposited energy.
         """
         Ce, G = self.Ce(T), self.Gep(T)
         tth = Ce / G
-        phi = 1e-4 if which == "L" else None
-        s = self.sj.andreev_sums(1e-4 if phi is None else phi, T, which)
+        # operating phase as in freq_noise_spectrum, nep_spectrum and
+        # energy_resolution_analytic_A (before 0.10.1 the "I" readout
+        # was evaluated at phi = 1e-4 here)
+        phi = 1e-4 if which == "L" else self.sj.phi_max(T)
+        s = self.sj.andreev_sums(phi, T, which)
         I1 = self.sj.dIdphi0(T)
         p = self.participation(T)
         conv = (p / 2.0) / I1              # dO -> fractional frequency
@@ -108,7 +112,7 @@ class SensorBudget:
         S_ph = (R**2) * (4 * KB * T**2 / G) * np.abs(Hth)**2 * \
             np.abs(HA)**2
         S_tot = S_A + S_ph + S_ro_y
-        integ = 4.0 * np.trapezoid(Y**2 / S_tot, f)
+        integ = 4.0 * trapezoid(Y**2 / S_tot, f)
         return 1.0 / np.sqrt(integ)
 
     def nep_spectrum(self, T, tauA, freqs, S_ro_y=0.0, which="L"):

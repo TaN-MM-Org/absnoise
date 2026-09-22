@@ -8,9 +8,8 @@ so that <n> = f, var(n) = f(1-f), correlation time tauA, and the
 single-sided PSD of each n is  S_n(omega) = 4 f(1-f) tauA/(1+omega^2
 tauA^2).  The observable O = g sum_ch (1 - n_up - n_down) then has
     S_O(omega) = g^2 M_ch * 2 * 4 f(1-f) tauA / (1 + omega^2 tauA^2),
-which the testbench compares against the analytic sums of
-short_junction.andreev_sums, together with the variance convention
-var(mean over t) = S(0) / (2 t).
+which the tests compare against this closed form (plateau and knee),
+together with the variance convention var(mean over t) = S(0) / (2 t).
 """
 
 import numpy as np

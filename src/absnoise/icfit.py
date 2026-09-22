@@ -77,9 +77,11 @@ def _shape_zero(Tc, tau):
     the root of tau u^2 - 2u + 1, u* = (1 - sqrt(1-tau))/tau."""
     D0 = BCS_RATIO * KB * Tc
     if tau >= 1.0:
-        u = 1.0
-    else:
-        u = (1.0 - np.sqrt(1.0 - tau)) / tau
+        # u* = 1 (phi* = pi): the general expression below is 0/0
+        # there; its limit is sqrt(u (1 - u)) / sqrt(1 - u) -> 1,
+        # i.e. the ballistic value Delta0 / 2
+        return D0 / 2.0
+    u = (1.0 - np.sqrt(1.0 - tau)) / tau
     return D0 * tau / 4.0 * 2.0 * np.sqrt(u * (1.0 - u)) \
         / np.sqrt(1.0 - tau * u)
 
