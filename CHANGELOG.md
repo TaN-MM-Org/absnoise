@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.10.1 (2026-09-22)
+
+Bug fixes, a CI update and a rewritten README.
+
+### Fixed
+
+- NumPy 1.x support: four integrals called `numpy.trapezoid`, which
+  exists only from NumPy 2.0, although `pyproject.toml` allows
+  NumPy >= 1.24. On NumPy 1.x, `SensorBudget.energy_resolution`,
+  the current and free-energy methods of `JunctionModel` (`Ic`,
+  `calibrate`, ...), `junction_properties`, `continuum_share` and
+  `occupation_heat_capacities` raised `AttributeError` (9 of 83 tests
+  failed with NumPy 1.24.0 / SciPy 1.10.0). A small helper
+  (`absnoise._compat.trapezoid`) now uses `numpy.trapezoid` or, on
+  NumPy 1.x, `numpy.trapz`.
+- `SensorBudget.energy_resolution(which="I")` evaluated the current
+  readout at phase 1e-4 rad instead of the phase of maximum current
+  used by `freq_noise_spectrum`, `nep_spectrum` and
+  `energy_resolution_analytic_A`, so it disagreed with the NEP-based
+  value. The default `which="L"` is unchanged. Its docstring also
+  wrote the matched-filter integral with a factor 2; the code uses 4,
+  which is correct for single-sided spectra.
+- `ic_model` (and so `fit_ic_curve` and `plan_ic_measurement`)
+  returned NaN at transparency `tau = 1`, which their documented range
+  (0, 1] allows; the zero-temperature normalization now uses its limit
+  `Delta0 / 2` there.
+- `fit_telegraph_psd` accepted `n_avg < 1` and returned infinite or NaN
+  error bars; it now raises `ValueError`, as `plan_psd_measurement`
+  already did.
+- `TelegraphHMM` and `fit_hmm` were exported but missing from
+  `__all__`.
+- Docstrings that described tests that do not exist were corrected:
+  a Monte Carlo check of the pair-process master equation
+  (`master`), an RK4 convergence-order check (`twotemp`), a continuity
+  check of the continuum sign (`levels`), and a comparison of telegraph
+  Monte Carlo with `andreev_sums` (`telegraph`). The `psdfit` module
+  docstring said noise-free recovery holds to 1e-6 for all three
+  parameters; the test asserts 1e-4 for the floor.
+
+### Tests
+
+- New `tests/test_v0101.py` (5 tests, each failing before its fix):
+  integrals without `numpy.trapezoid`, the NEP matched-filter identity
+  for `which="I"`, `ic_model` at `tau = 1`, the `n_avg` refusal, and
+  `__all__` completeness. 88 tests in total (83 before).
+- Tests that called `numpy.trapezoid` use the same helper.
+- CI: Python 3.10 added to the matrix (now 3.9 to 3.14), and a new
+  `oldest-dependencies` job runs the suite on Python 3.9 with
+  NumPy 1.24.0 and SciPy 1.10.0 (also passed locally on Python 3.10).
+
+### Changed
+
+- README rewritten for readers outside the field: a guide to the
+  words used, units and conventions, seven examples with their exact
+  output, every public name, the refusals, and the main test checks
+  with their real tolerances.
+- CONTRIBUTING.md: the dependencies are NumPy and SciPy (it said
+  NumPy only).
+
+### Corrections to earlier notes
+
+- 0.10.0 has no entry in this file; its README describes
+  `plan_psd_measurement` and `averages_for_tau`, which the 0.9.0 entry
+  does not list.
+- 0.5.0 lists the CI matrix as Python 3.9, 3.11, 3.12, 3.13; Python
+  3.10 was not tested until this release, although `requires-python`
+  is `>=3.9`.
+- 0.7.0 says noise-free PSD recovery "to 1e-6": the test asserts 1e-6
+  for `S0` and `tau` and 1e-4 for the floor.
+- 0.6.0 calls the known-noise covariance "exact" and the noise-free
+  recovery "exact": the covariance is the linearized estimate, and
+  the test asserts recovery within 1e-6 (`Ic0`, `Tc`) and 1e-5 (`tau`).
+- 0.5.0 says the continuum share is "at the percent level for the
+  recipe set": the test checks one recipe (Ti/Al/Au), requiring a
+  positive share below 10 %. Its "exact peak-temperature deposit
+  identity" checks the starting temperature formula, not the time
+  integration.
+
 ## 0.9.0 (2026-09-17)
 
 Lab adaptability: the measurements planned before the fridge time is
