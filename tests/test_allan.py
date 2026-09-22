@@ -5,6 +5,7 @@ import pytest
 
 from absnoise import telegraph_traces
 from absnoise.allan import allan_variance, avar_exponential, avar_white
+from absnoise._compat import trapezoid
 
 
 def test_linear_drift_exact():
@@ -25,12 +26,12 @@ def test_closed_form_matches_defining_integrals():
         u = np.linspace(0.0, T, 20001)
         C = var * np.exp(-u / tau)
         # E[A^2] = 2 int_0^T (T-u) C(u) du
-        EA2 = 2.0 * np.trapezoid((T - u) * C, u)
+        EA2 = 2.0 * trapezoid((T - u) * C, u)
         # E[AB] over s in [0,T], t in [T,2T]: substituting w = t - s
         # in [0, 2T] gives the triangular overlap kernel
         w = np.linspace(0.0, 2.0 * T, 40001)
         kern = np.where(w <= T, w, 2.0 * T - w)
-        EAB = np.trapezoid(kern * var * np.exp(-w / tau), w)
+        EAB = trapezoid(kern * var * np.exp(-w / tau), w)
         avar_num = (EA2 - EAB) / T ** 2
         assert avar_exponential(var, tau, T) == pytest.approx(
             avar_num, rel=1e-6)

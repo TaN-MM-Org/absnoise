@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from absnoise import KB, RECIPES, SensorBudget
+from absnoise._compat import trapezoid
 
 B = SensorBudget(RECIPES[1])
 T = 0.3 * B.recipe.Tc
@@ -32,7 +33,7 @@ def test_matched_filter_identity_reproduces_energy_resolution():
                         np.log10(fmax), 6000)
         nep = B.nep_spectrum(T, TAUA, f, S_ro_y=S_ro)
         sig_from_nep = 1.0 / np.sqrt(
-            4.0 * np.trapezoid(1.0 / nep["total"] ** 2, f))
+            4.0 * trapezoid(1.0 / nep["total"] ** 2, f))
         sig_direct = B.energy_resolution(T, TAUA, S_ro_y=S_ro)
         assert abs(sig_from_nep - sig_direct) / sig_direct < 1e-10
 

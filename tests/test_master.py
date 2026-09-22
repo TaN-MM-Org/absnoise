@@ -2,6 +2,7 @@
 import numpy as np
 
 from absnoise import channel_generator, noneq_penalty, sigma_spectrum
+from absnoise._compat import trapezoid
 
 
 def test_singles_limit_is_exact():
@@ -44,7 +45,7 @@ def test_spectrum_integrates_to_variance():
     f, Gs, Gp = 0.3, 1.0, 2.0
     om = np.linspace(0.0, 4000.0, 2000001)
     S, S0, var, _ = sigma_spectrum(f, Gs, Gp, om)
-    integral = np.trapezoid(S, om) / (2 * np.pi)
+    integral = trapezoid(S, om) / (2 * np.pi)
     # remaining deficit is the analytic 1/omega tail beyond the grid
     assert abs(integral - var) / var < 5e-4
 

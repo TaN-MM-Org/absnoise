@@ -1,8 +1,8 @@
 """v0.5 anchors: the continuum occupation-channel quantification
 against the level-sum identity and the short-junction limit, and the
 two-temperature phonon-bath dynamics against its structural
-invariants (exact fixed point, energy conservation with RK4-order
-convergence, the independently computed isolated common temperature,
+invariants (exact fixed point, energy conservation to 1e-5,
+the independently computed isolated common temperature,
 and the pinned-bath reduction to `click_template`)."""
 import dataclasses
 
