@@ -244,7 +244,11 @@ def plan_psd_measurement(f_hz, n_avg, S0, tau_s, floor=0.0,
     Returns dict(sigma, identifiable, condition_number): `sigma` maps
     S0 (input PSD units), tau_s (s) and -- when fitted -- floor to
     the error bars the fit would report at this averaging depth. The
-    exact scaling is 1/sqrt(n_avg): the same matrix at any depth.
+    per-bin log-variance is psi'(n_avg) (trigamma), the value the fit
+    uses (changed in 0.11.0; up to 0.10.x it was 1/n_avg), so every
+    error bar scales exactly as sqrt(psi'(n_avg)), which approaches
+    1/sqrt(n_avg) for many averages (0.4 % larger at n_avg = 64, 28 %
+    larger at n_avg = 1).
     """
     _check_psd_point(f_hz, S0, tau_s, floor)
     n_avg = int(n_avg)
@@ -252,7 +256,7 @@ def plan_psd_measurement(f_hz, n_avg, S0, tau_s, floor=0.0,
         raise ValueError("n_avg must be >= 1")
     f = np.asarray(f_hz, dtype=float).ravel()
     jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor)
-    fisher = jac.T @ jac * float(n_avg)
+    fisher = jac.T @ jac / _log_var(n_avg)
     names = ["S0", "tau_s"] + (["floor"] if fit_floor else [])
     identifiable, cond, sig_frac = _invert_information(fisher, names)
     sigma = None
@@ -263,11 +267,23 @@ def plan_psd_measurement(f_hz, n_avg, S0, tau_s, floor=0.0,
             "condition_number": cond}
 
 
+def _log_var(n_avg):
+    """Variance of the logarithm of an average of n_avg independent
+    periodogram bins (Gamma(n, 1/n) scatter): the trigamma function
+    psi'(n_avg). Same value as `fit_telegraph_psd` uses."""
+    from scipy.special import polygamma
+    return float(polygamma(1, float(n_avg)))
+
+
 def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
                      fit_floor=True):
     """How many periodogram averages does a target tau error bar
-    cost? Exact closed form: every error bar scales as
-    1/sqrt(n_avg), so n_avg = ceil((sigma_at_1 / target)^2).
+    cost? Every error bar scales as sqrt(psi'(n_avg)) (see
+    `plan_psd_measurement`), so this returns the smallest integer
+    n_avg with psi'(n_avg) <= (target / sigma_unit)^2, where
+    sigma_unit is the error bar for unit log-variance per bin. Up to
+    0.10.x the scaling was taken as 1/sqrt(n_avg), which gives the
+    same number or one fewer.
 
     Returns (n_avg, plan) with `plan` the `plan_psd_measurement`
     result at the returned depth. Refuses bands the fit itself would
@@ -281,7 +297,14 @@ def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
         raise ValueError("the band cannot determine the parameters "
                          "at any averaging depth; change the band "
                          "(see psd_band_for_tau)")
-    n = max(1, int(np.ceil((base["sigma"]["tau_s"] / t) ** 2)))
+    sigma_unit = base["sigma"]["tau_s"] / np.sqrt(_log_var(1))
+    q = (t / sigma_unit) ** 2           # allowed per-bin log-variance
+    # psi'(n) > 1/n, so no n below 1/q qualifies; psi'(n) is
+    # decreasing and exceeds 1/n by about 1/(2 n^2), so the search
+    # below stops after one or two steps
+    n = max(1, int(np.floor(1.0 / q)))
+    while _log_var(n) > q:
+        n += 1
     return n, plan_psd_measurement(f_hz, n, S0, tau_s, floor,
                                    fit_floor)
 

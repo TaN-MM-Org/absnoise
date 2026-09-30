@@ -29,7 +29,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import brentq
 
-from .constants import E_CHARGE, HBAR, KB
+from .constants import BCS_RATIO, E_CHARGE, HBAR, KB
 from .levels import gap_bcs
 from .materials import Recipe
 
@@ -41,10 +41,19 @@ def matched_Tc(T0, ratio=MATCHED_RATIO):
     satisfies Delta*(T0) = ratio * kB * T0 at operating temperature T0.
 
     Uses the solved gap equation (gap_bcs); the widely used tanh
-    interpolation would return a visibly different Tc. The test suite
-    verifies the defining equation to 1e-9."""
+    interpolation would return a visibly different Tc. The
+    zero-temperature gap is Delta0 = 1.764 kB Tc (BCS_RATIO), the
+    convention of `Recipe.Delta` and so of every budget built on
+    `matched_recipe` (fixed in 0.11.0: before, this solve used
+    1.7639 kB Tc, and the budget of the returned recipe then had
+    Delta*(T0) / kB T0 = 2.39954 instead of 2.3994). The test suite
+    verifies the defining equation, through `SensorBudget`, to 1e-9."""
+    T0 = float(T0)
+    if not (np.isfinite(T0) and T0 > 0.0):
+        raise ValueError("T0 must be finite and positive (K)")
+
     def g(Tc):
-        return gap_bcs(T0, Tc, 1.7639 * KB * Tc) - ratio * KB * T0
+        return gap_bcs(T0, Tc, BCS_RATIO * KB * Tc) - ratio * KB * T0
     return float(brentq(g, T0 * 1.01, T0 * 6.0))
 
 

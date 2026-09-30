@@ -33,6 +33,23 @@ exact integral, S0 / (4 tau), matches the variance of the generating
 telegraph Monte-Carlo traces (Parseval, two independent code paths);
 the fitted tau matches the Monte-Carlo generating value within
 statistical tolerance; and both out-of-band knee cases are refused.
+
+Statistics of an averaged periodogram (changed in 0.11.0). For Gaussian
+noise, one periodogram bin (not the zero or Nyquist bin) scatters as S
+times an exponential variable, and the average of n independent
+periodograms as S times a Gamma(n, 1/n) variable. Its logarithm then
+has mean ln S + psi(n) - ln n and variance psi'(n) (psi is the digamma
+function, psi' the trigamma function; standard properties of the Gamma
+distribution). When `n_avg` is given, the fit subtracts that offset and
+uses psi'(n_avg) as the per-bin variance. Up to 0.10.x it used no offset
+and the variance 1/n_avg: S0 and the floor came out low by the factor
+exp(psi(n) - ln n) (0.56 for n = 1, 0.76 for n = 2, 0.992 for n = 64),
+and chi2 came out high by n psi'(n) (1.64 for n = 1, 1.008 for n = 64).
+tau does not depend on the offset (it scales S0 and the floor
+together). Without `n_avg` nothing is corrected, because the offset is
+unknown; for n_avg = n the bias of S0 and floor is then the factor
+above. The Gamma statistics are exact for Gaussian noise and hold
+approximately for telegraph noise over records much longer than tau.
 """
 from __future__ import annotations
 
@@ -40,6 +57,7 @@ import dataclasses
 
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.special import digamma, polygamma
 
 __all__ = ["TelegraphPSDFit", "fit_telegraph_psd", "telegraph_psd_model"]
 
@@ -64,8 +82,9 @@ class TelegraphPSDFit:
         S0 / (4 tau) -- its exact single-sided integral, useful as a
         cross-check against the trace variance.
     chi2, chi2_dof : residual chi-square of the log-space fit when
-        `n_avg` was given (each averaged PSD bin has log-scatter
-        ~ 1/sqrt(n_avg)).
+        `n_avg` was given (each averaged PSD bin has log-variance
+        psi'(n_avg), the trigamma function; about 1/n_avg for large
+        n_avg).
     model : the fitted model evaluated at the data frequencies.
     """
 
@@ -88,9 +107,13 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
         `psd_single_sided`).
     fit_floor : also fit a white background floor (default True; set
         False for background-subtracted spectra).
-    n_avg : number of independent averages behind each bin; when
-        given, the known log-scatter 1/sqrt(n_avg) per bin turns the
-        residual into a chi-square consistency check.
+    n_avg : number of independent periodograms averaged in each bin
+        (it need not be an integer: an effective number is accepted).
+        When given, the fit removes the known offset psi(n) - ln n of
+        the logarithm of an averaged periodogram, so S0 and the floor
+        are not biased low, and uses the exact log-variance psi'(n) per
+        bin for the error bars and a chi-square consistency check (see
+        the module docstring; changed in 0.11.0).
 
     Raises ValueError on malformed input and on the out-of-band knee
     (see module docstring: a band that never sees the knee cannot
@@ -117,11 +140,19 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
                                   and float(n_avg) >= 1.0):
         raise ValueError("n_avg must be >= 1 (the number of averaged "
                          "periodograms behind each bin)")
-    logS = np.log(S)
+    if n_avg is None:
+        log_offset = 0.0
+    else:
+        log_offset = float(digamma(float(n_avg)) - np.log(float(n_avg)))
+    logS = np.log(S) - log_offset
 
     # starting guesses from the data themselves
-    S0_0 = float(np.median(S[f <= np.percentile(f, 20)]))
-    fl_0 = float(np.median(S[f >= np.percentile(f, 80)]))
+    # (divided by exp(log_offset), so that with n_avg the problem is
+    # exactly the uncorrected one shifted by a constant in log space)
+    S0_0 = float(np.median(S[f <= np.percentile(f, 20)])) \
+        * np.exp(-log_offset)
+    fl_0 = float(np.median(S[f >= np.percentile(f, 80)])) \
+        * np.exp(-log_offset)
     tau_0 = 1.0 / (2.0 * np.pi * float(np.median(f)))
 
     if fit_floor:
@@ -168,9 +199,9 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
         cov_log = cov_log * (rss / max(dof, 1))
         chi2 = chi2_dof = None
     else:
-        sig_bin = 1.0 / np.sqrt(float(n_avg))
-        cov_log = cov_log * sig_bin ** 2
-        chi2, chi2_dof = rss / sig_bin ** 2, dof
+        var_bin = float(polygamma(1, float(n_avg)))
+        cov_log = cov_log * var_bin
+        chi2, chi2_dof = rss / var_bin, dof
     s_log = np.sqrt(np.maximum(np.diag(cov_log), 0.0))
     names = ["S0", "tau_s"] + (["floor"] if fit_floor else [])
     vals = [S0, tau, fl][:len(names)]

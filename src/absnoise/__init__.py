@@ -26,9 +26,10 @@ from .shortjunction import ShortJunction
 from .finitelength import FiniteLJunction
 from .master import (channel_generator, noneq_penalty, sigma_spectrum,
                      tau_activated)
-from .telegraph import psd_single_sided, telegraph_traces
+from .telegraph import (flip_probabilities, psd_single_sided,
+                        telegraph_traces)
 from .allan import allan_variance, avar_exponential, avar_white
-from .budgets import SensorBudget
+from .budgets import SensorBudget, matched_filter_sigma
 from .click import (click_monte_carlo, click_template, matched_Tc,
                     matched_recipe)
 from .twotemp import total_energy, two_temperature_click
@@ -42,7 +43,7 @@ from .psdfit import TelegraphPSDFit, fit_telegraph_psd, telegraph_psd_model
 from .data import (load_ic_csv, load_trace_csv, save_ic_csv,
                    save_trace_csv, validate_ic_data)
 
-__version__ = "0.10.1"
+__version__ = "0.11.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
@@ -51,8 +52,9 @@ __all__ = [
     "ShortJunction", "FiniteLJunction",
     "channel_generator", "sigma_spectrum", "tau_activated",
     "noneq_penalty", "telegraph_traces", "psd_single_sided",
+    "flip_probabilities",
     "allan_variance", "avar_exponential", "avar_white",
-    "SensorBudget",
+    "SensorBudget", "matched_filter_sigma",
     "TelegraphHMM", "fit_hmm",
     "IcFit", "fit_ic_curve", "ic_model",
     "TelegraphPSDFit", "fit_telegraph_psd", "telegraph_psd_model",
