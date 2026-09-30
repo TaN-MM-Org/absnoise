@@ -1,5 +1,154 @@
 # Changelog
 
+## 0.11.0 (2026-09-30)
+
+Exact where 0.10.x approximated: the matched-filter energy resolution
+in closed form, exact sampling of the telegraph process in the
+simulator and the decoder, the exact statistics of averaged
+periodograms in the spectrum fit and its planner; and error bars for
+the readout-trace decoder.
+
+### Added
+
+- `matched_filter_sigma(P, Q, W, tau_th, tauA)`: closed-form
+  matched-filter energy resolution for the budget's three noise
+  channels (phonon, occupation, readout floor), from
+  `int_0^inf dx / (a + b x^2 + c x^4) = pi / (2 sqrt(a) sqrt(b + 2 sqrt(a c)))`.
+  `SensorBudget.energy_resolution` uses it by default;
+  `method="grid"` keeps the 0.10.x numerical integral.
+- `TelegraphHMM.uncertainties(y, dt=None)`: covariance and
+  one-standard-deviation errors of (p_up, p_dn, m0, m1, sigma), and of
+  f and tauA when dt is given, from the observed information (central
+  differences of the exact gradient). `TelegraphHMM.score` (exact
+  gradient of the log-likelihood by Fisher's identity) and
+  `TelegraphHMM.loglik`.
+- `flip_probabilities(f, tauA, dt)`: exact per-sample flip
+  probabilities of a sampled two-state process.
+- README Example 8 (a noise spectrum with few averages) and error bars
+  in Example 6; a "What changed in 0.11.0" section.
+
+### Changed
+
+- `fit_hmm` starts from the exact two-group split of the samples (the
+  threshold with the smallest within-group sum of squares), with the
+  upper group's fraction as the starting occupation, instead of the
+  median split. This lifts a limit the 0.10.1 README listed: a trace
+  with more than half of its samples exactly at the maximum could not
+  start. `fit_hmm` now refuses fewer than 4 samples, non-finite samples
+  and constant traces.
+- `TelegraphHMM.forward_backward` and `viterbi` run on Python floats:
+  on 20 000 samples about 10 times (forward-backward) and 17 times
+  (Viterbi) faster than 0.10.1, with results equal to the 0.10.1
+  matrix code to 1e-12 and identical Viterbi paths (tested). The
+  Gaussian densities are formed in log space and divided by their
+  larger value at each sample (the log-likelihood adds the divisor
+  back), so a far outlier no longer underflows: with one 200-sigma
+  sample, 0.10.1 returned a NaN log-likelihood and `fit_hmm` stopped
+  with "flip probabilities must lie in (0, 1)"; now both are finite.
+  The start split uses samples clipped to their 0.1 % and 99.9 %
+  quantiles, so a lone outlier cannot become a "state". Single-sample
+  traces still work in `forward_backward`, `posterior` and `viterbi`
+  (same values as 0.10.1); an empty trace is refused.
+- `SensorBudget` methods refuse T <= 0, T at or above Tc (gap closed;
+  `Ce`, `Gep`, `tau_th` and `dT_phonon` still accept it), non-positive
+  or non-finite tauA and averaging time, `which` other than "L"/"I"
+  and a negative readout floor. Before: ZeroDivisionError at T = 0 or
+  T >= Tc, NaN for negative tauA, and any other `which` was silently
+  treated as an inductance coupling at the maximum-current phase.
+- `telegraph_traces` validates f, tauA, dt, n_steps and n_channels
+  with ValueError; the `assert` on the time step is gone (no longer
+  needed).
+- `matched_Tc` refuses a non-positive T0.
+
+### Fixed
+
+- `SensorBudget.energy_resolution` stopped its integral at
+  10 / (2 pi min(tauA, tau_th)), where the integrand has not decayed
+  (it falls as 1/f^2 where occupation noise dominates and is flat
+  where phonon noise dominates), and so overestimated sigma_E.
+- `TelegraphHMM.rates` / `from_rates` and `telegraph_traces` used the
+  first-order flip probabilities dt f / tauA and dt (1-f) / tauA. For
+  a continuous-time process read every dt the exact values are
+  f (1 - e^(-dt/tauA)) and (1 - f)(1 - e^(-dt/tauA)); `rates` now
+  returns tauA = -dt / ln(1 - p_up - p_dn) and raises when
+  p_up + p_dn >= 1.
+- `fit_telegraph_psd(n_avg=n)` treated the log of an average of n
+  periodograms as unbiased with variance 1/n. It has mean
+  ln S + psi(n) - ln n and variance psi'(n) (Gamma(n, 1/n) scatter,
+  exact for Gaussian noise); the fit now removes the offset and uses
+  psi'(n). `plan_psd_measurement` and `averages_for_tau` use psi'(n)
+  too; `averages_for_tau` searches for the smallest sufficient
+  integer instead of the 1/sqrt(n) closed form.
+- `matched_Tc` used Delta0 = 1.7639 kB Tc, while `Recipe.Delta` (and
+  so the budget of `matched_recipe`) uses 1.764 kB Tc.
+- `psd_single_sided` doubled the Nyquist bin for an even number of
+  samples; `sum(S) df` now equals the variance exactly.
+- The decode module docstring promised likelihood-based error bars
+  that the module did not compute.
+
+### Behaviour changes (before -> after)
+
+- Energy resolution, Ti/Al/Au at 0.3 Tc (README Example 1,
+  tauA = 1 us): 1.810e-22 J -> 1.752e-22 J (-3.2 %); with
+  tauA = 1 ns: -9.7 % ("L") and -15 % ("I") (grid overestimates of
+  10.7 % and 18 %). With a large readout floor (S_ro_y = 1e-18) and
+  tauA = 1 us the change is below 0.1 % (both readouts), but with
+  tauA = 1 ns it is still -2.6 % ("L") and -10 % ("I").
+- HMM tauA from the same fitted flip probabilities: multiplied by
+  s / (-ln(1 - s)), s = p_up + p_dn, i.e. 2.5 % smaller at
+  dt = 0.05 tauA and 21 % smaller at dt = 0.5 tauA (the old value was
+  27 % too long there). README Example 6:
+  f = 0.297, tau = 0.977 ms -> f = 0.290 +- 0.020,
+  tau = 0.993 +- 0.056 ms (new trace, new start, new conversion; true
+  values 0.3 and 1 ms).
+- `telegraph_traces` output changes wherever a random number falls
+  between the old and new flip thresholds (the random stream is the
+  same). README Example 5: fitted tau 198 -> 201 us, Lorentzian
+  variance 0.2112 -> 0.2116, trace variance 0.2112 -> 0.2107, Allan
+  values 3.14/5.26/2.34 -> 3.12/5.17/2.33.
+- `fit_telegraph_psd` with n_avg: S0 and floor larger by
+  exp(ln n - psi(n)) (1.78 for n = 1, 1.31 for n = 2, 1.14 for n = 4,
+  1.0079 for n = 64); tau unchanged (to the optimizer tolerance,
+  about 3e-9); relative error bars larger by sqrt(n psi'(n)) (1.28
+  for n = 1, 1.0039 for n = 64), so sigma(tau) grows by that factor
+  and sigma(S0), sigma(floor) by it times the S0 factor; chi2 smaller
+  by the factor 1 / (n psi'(n)).
+  Without n_avg nothing changes.
+- PSD planner (README Example 4): sigma(tau) at 64 averages
+  15.50 us -> 15.56 us; averages needed for 3 us 1708 -> 1709.
+- `matched_Tc(0.05)`: 0.0776088 K -> 0.0776059 K (-3.6e-5 relative).
+- `psd_single_sided`: only the last bin of an even-length record
+  changes (halved).
+
+### Tests
+
+- New `tests/test_v011.py` (43 tests): closed form against adaptive
+  quadrature over all frequencies (1e-9 bare, 1e-8 through the budget
+  and `nep_spectrum`, both readouts) and its two exact limits (1e-14);
+  the grid overestimate pinned to the documented 3.3 % and 10.7 %;
+  budget refusals; flip probabilities against `scipy.linalg.expm`
+  (1e-9) and the first-order limit (1e-5); Monte Carlo
+  autocorrelation e^-k at dt = tauA (0.01); exact rate inversion
+  (1e-9); coarse-trace tau within 4 error bars; score against finite
+  differences (1e-5); binomial limit of the error bars (0.5 %); Monte
+  Carlo calibration of the error bars (z-score standard deviation in
+  [0.65, 1.4] over 30 traces); the two-group start on a noise-free
+  trace filled 90 % of the time and against brute force (1e-12); the
+  fast recursions against the 0.10.1 matrix code (1e-12); the PSD
+  offset as an exact rescaling (1e-7) and a 300-spectrum Monte Carlo
+  of an average of two periodograms (unbiased log S0, chi2/dof within
+  0.06 of 1, tau scatter within 20 % of the plan, and no refused fit
+  in the 300 draws, asserted); Parseval (1e-12); a 200-sigma outlier
+  (log-likelihood equal to a log-space logsumexp forward recursion to
+  1e-10, finite and monotone EM); a single-sample trace against its
+  closed form (1e-14).
+- Updated: the NEP matched-filter identities in `test_nep.py` and
+  `test_v0101.py` and the NumPy 1.x integral check now name
+  `method="grid"` (the path they were written for); the planner tests
+  use psi'(n) scaling and a noise-free spectrum at the log-mean; the
+  matched-design test checks the ratio inside `SensorBudget`.
+- 131 tests in total (88 before).
+
 ## 0.10.1 (2026-09-22)
 
 Bug fixes, a CI update and a rewritten README.

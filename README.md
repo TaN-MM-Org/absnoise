@@ -41,6 +41,7 @@ number that looks fine but is not.
 - [Install](#install)
 - [Units and conventions](#units-and-conventions)
 - [Examples](#examples) (each with the output it prints)
+- [What changed in 0.11.0](#what-changed-in-0110)
 - [What is in the package](#what-is-in-the-package)
 - [When it refuses, and why](#when-it-refuses-and-why)
 - [How the results are checked](#how-the-results-are-checked)
@@ -156,7 +157,7 @@ run `pip install -e .[test]`, then `pytest`.
 ## Examples
 
 Each example below runs as written, and the output shown is what it
-printed with absnoise 0.10.1 (Python 3.11, NumPy 2.4.6, SciPy 1.17.1).
+printed with absnoise 0.11.0 (Python 3.11, NumPy 2.4.6, SciPy 1.17.1).
 Values not taken from the shipped recipes -- correlation times,
 geometries, noise levels -- are illustrative, not measurements.
 
@@ -192,7 +193,7 @@ for fi, a, p in zip(f, nep["andreev"], nep["phonon"]):
 T = 0.225 K, thermal time tau_th = 0.78 ns
 temperature resolution in 1 s: Andreev 40.48 uK, phonon 3.58 uK
 tauA/C_A = 1.172e+15 s K/J, tau_th/C_e = 9.145e+12 s K/J
-energy resolution: 1.810e-22 J (the energy of a 273 GHz photon)
+energy resolution: 1.752e-22 J (the energy of a 264 GHz photon)
 NEP at 0e+00 Hz: Andreev 6.26e-18, phonon 5.53e-19 W/sqrt(Hz)
 NEP at 1e+07 Hz: Andreev 6.27e-18, phonon 5.53e-19 W/sqrt(Hz)
 NEP at 1e+08 Hz: Andreev 6.97e-18, phonon 5.53e-19 W/sqrt(Hz)
@@ -203,7 +204,10 @@ sets the temperature resolution. That matches the criterion stated in
 the code: occupation noise dominates when `tauA/C_A` is larger than
 `tau_th/C_e`. In the NEP, the phonon part is flat at every frequency
 (`sqrt(4 kB T^2 G)`), and the occupation part rises as
-`sqrt(1 + (2 pi f tau_th)^2)`.
+`sqrt(1 + (2 pi f tau_th)^2)`. The energy resolution is computed in
+closed form over all frequencies (since 0.11.0; 0.10.x printed
+1.810e-22 J here, 3.3 % too high, because its numerical integral
+stopped at a finite frequency).
 
 ### 2. The temperature bound, finite length, and pair processes
 
@@ -331,8 +335,8 @@ run up to 0.2 K: sigma(Tc) = 1031.1 mK, covers_tc_knee = False
 run up to 0.65 K: sigma(Tc) = 6.1 mK, covers_tc_knee = True
 measure at: [0.03  0.078 0.365 0.413 0.7  ] K
 PSD band 132.6 to 2122 Hz (knee 531 Hz)
-64 averages: sigma(tau) = 15.50 us
-averages needed for sigma(tau) <= 3 us: 1708
+64 averages: sigma(tau) = 15.56 us
+averages needed for sigma(tau) <= 3 us: 1709
 ```
 
 The planned error bars are the same matrix the fit reports, computed
@@ -343,7 +347,10 @@ far below `Tc` barely feels `Tc`; the plan flags this as
 a time (a greedy method, not a proof of the best set).
 `psd_band_for_tau` returns a band from `f_knee/4` to `4 f_knee` that
 satisfies the rules `fit_telegraph_psd` enforces. Error bars fall as
-`1/sqrt(n_avg)`, and `averages_for_tau` inverts that.
+`sqrt(psi'(n_avg))`, which is close to `1/sqrt(n_avg)` for many
+averages (see [Example 8](#8-a-noise-spectrum-with-few-averages)), and
+`averages_for_tau` inverts that. (0.10.x used `1/sqrt(n_avg)` and
+printed 15.50 us and 1708.)
 
 ### 5. Occupation noise from a spectrum, and the Allan variance
 
@@ -384,11 +391,11 @@ for T, a, c in zip(taus, avar, closed):
 ```
 
 ```
-fitted tau = 198 +- 2 us (true 200 us)
-variance under the fitted Lorentzian 0.2112, trace variance 0.2112
-T = 0.1 ms: measured 3.14e+00, closed form 3.13e+00
-T = 0.4 ms: measured 5.26e+00, closed form 5.12e+00
-T = 1.6 ms: measured 2.34e+00, closed form 2.73e+00
+fitted tau = 201 +- 2 us (true 200 us)
+variance under the fitted Lorentzian 0.2116, trace variance 0.2107
+T = 0.1 ms: measured 3.12e+00, closed form 3.13e+00
+T = 0.4 ms: measured 5.17e+00, closed form 5.12e+00
+T = 1.6 ms: measured 2.33e+00, closed form 2.73e+00
 ```
 
 `fit_telegraph_psd` fits `S0 / (1 + (2 pi f tau)^2) + floor` in
@@ -399,7 +406,7 @@ form `avar_exponential`; the longest window has the fewest independent
 samples and scatters most (the test suite checks agreement within 12 %
 on a longer record).
 
-### 6. Decode a noisy readout trace
+### 6. Decode a noisy readout trace, with error bars
 
 ```python
 import os, tempfile
@@ -419,17 +426,27 @@ dt2, y2 = load_trace_csv(path)           # refuses a non-uniform time grid
 
 model, logliks = fit_hmm(y2)
 f_hat, tau_hat = model.rates(dt2)
-print(f"f = {f_hat:.3f}, tau = {tau_hat * 1e3:.3f} ms, "
-      f"levels {model.means[0]:.3f} and {model.means[1]:.3f}, noise {model.sigma:.3f}")
-print(f"EM iterations: {len(logliks)}")
+err = model.uncertainties(y2, dt2)["sigma"]
+print(f"f = {f_hat:.3f} +- {err['f']:.3f}, "
+      f"tau = {tau_hat * 1e3:.3f} +- {err['tauA'] * 1e3:.3f} ms")
+print(f"levels {model.means[0]:.3f} and {model.means[1]:.3f}, "
+      f"noise {model.sigma:.3f}, EM iterations: {len(logliks)}")
 path_hat = model.viterbi(y2)
 print(f"samples decoded correctly: {(path_hat == n).mean() * 100:.2f} %")
+
+# The same process read out only every 0.5 ms (half of tau):
+m = telegraph_traces(0.3, 1e-3, 5e-4, 20000, 1, rng)[:, 0]
+coarse, _ = fit_hmm(m + rng.normal(0.0, 0.3, m.size))
+print(f"sampled every 0.5 ms: tau = {coarse.rates(5e-4)[1] * 1e3:.3f} ms "
+      f"(first-order formula of 0.10: "
+      f"{5e-4 / (coarse.p_up + coarse.p_dn) * 1e3:.3f} ms)")
 ```
 
 ```
-f = 0.297, tau = 0.977 ms, levels -0.001 and 1.003, noise 0.302
-EM iterations: 8
-samples decoded correctly: 99.69 %
+f = 0.290 +- 0.020, tau = 0.993 +- 0.056 ms
+levels -0.001 and 1.003, noise 0.302, EM iterations: 6
+samples decoded correctly: 99.70 %
+sampled every 0.5 ms: tau = 1.014 ms (first-order formula of 0.10: 1.284 ms)
 ```
 
 `fit_hmm` finds the occupation fraction, the correlation time, the two
@@ -438,6 +455,20 @@ expectation-maximization (a standard method that improves the
 estimates step by step until they stop changing). `viterbi` gives the most probable filled/empty
 sequence and `posterior` the probability of "filled" at every sample.
 The trace goes through the documented file format (`t_s,y`) on the way.
+
+`uncertainties` (new in 0.11.0) gives one-standard-deviation error
+bars. They come from how sharply the likelihood (the probability of
+the recorded trace under the model) falls off around the best fit --
+the standard large-sample estimate, good when the trace holds many
+flips. Here the fitted `f` is 0.47 error bars and `tau` 0.12 error
+bars away from the true values (0.3 and 1 ms).
+
+The last lines read the same process only every 0.5 ms. Since 0.11.0
+the decoder treats the samples as snapshots of a process that runs
+in continuous time, which is exact for any sampling interval. The
+0.10.x conversion was correct only for samples much closer together
+than `tau`, and here it would have reported 1.284 ms instead of
+1.014 ms.
 
 ### 7. A single photon: matched design, click, and a refusal
 
@@ -480,6 +511,80 @@ filter. Its numbers are statistics-limited; the tests only check
 ordering relations. `two_temperature_click` also lets the local phonons
 heat up, but it has no default phonon parameters and refuses to run
 without them.
+
+### 8. A noise spectrum with few averages
+
+```python
+import numpy as np
+from absnoise import (telegraph_traces, psd_single_sided, fit_telegraph_psd)
+
+# One long simulated record: 16 channels summed, f = 0.3, tau = 0.2 ms,
+# 5 us steps (illustrative values).
+rng = np.random.default_rng(4)
+f_occ, tau, dt = 0.3, 2e-4, 5e-6
+x = telegraph_traces(f_occ, tau, dt, 4 * 2**15, 16, rng).sum(axis=1)
+
+# Cut it into 4 segments and average their periodograms: n_avg = 4.
+segs = x.reshape(4, -1).astype(float)
+fr = np.fft.rfftfreq(segs.shape[1], dt)
+S = np.mean([psd_single_sided(s, dt)[1] for s in segs], axis=0)
+keep = np.arange(1, 3000)                    # every bin up to 18 kHz
+f_b, S_b = fr[keep], S[keep]
+
+S0_true = 4 * 16 * f_occ * (1 - f_occ) * tau
+plain = fit_telegraph_psd(f_b, S_b)
+told = fit_telegraph_psd(f_b, S_b, n_avg=4)
+print(f"true S0 = {S0_true:.3e}")
+print(f"n_avg not given: S0 = {plain.S0:.3e}, tau = {plain.tau_s * 1e6:.0f} us")
+print(f"n_avg = 4:       S0 = {told.S0:.3e} +- {told.sigma['S0']:.1e}, "
+      f"tau = {told.tau_s * 1e6:.0f} +- {told.sigma['tau_s'] * 1e6:.0f} us")
+print(f"chi2 = {told.chi2:.1f} for {told.chi2_dof} degrees of freedom")
+```
+
+```
+true S0 = 2.688e-03
+n_avg not given: S0 = 2.473e-03, tau = 206 us
+n_avg = 4:       S0 = 2.816e-03 +- 1.6e-04, tau = 206 +- 6 us
+chi2 = 2961.5 for 2996 degrees of freedom
+```
+
+A periodogram scatters a lot, and its logarithm (which the fit uses)
+is on average too low: for an average of `n` periodograms by
+`psi(n) - ln n`, where `psi` is the digamma function (a standard
+special function; `psi'`, the trigamma function, is its derivative
+and gives the scatter). For `n = 4` that makes S0 and the floor 12 %
+too low. Given `n_avg`, the fit (since 0.11.0) removes this offset
+and uses the exact scatter, so `chi2` close to the degrees of freedom
+confirms the noise model. `tau` does not depend on the offset. Here
+the uncorrected S0 lies 1.3 error bars below the true value and the
+corrected one 0.8 error bars above it; with fewer averages the offset
+is larger (44 % for `n_avg = 1`). `n_avg` must be the number of
+independent periodograms behind every point: do not also average
+neighbouring frequencies, or pass that larger number.
+
+## What changed in 0.11.0
+
+New:
+
+- `SensorBudget.energy_resolution` is computed in closed form over all
+  frequencies (`matched_filter_sigma`); 0.10.x integrated numerically
+  over a band that ended too early and overestimated the resolution
+  (see "Corrections" below). `method="grid"` reproduces the old
+  numbers.
+- `TelegraphHMM.uncertainties(y, dt)`: error bars for everything
+  `fit_hmm` returns (Example 6); also `score` (the exact gradient of
+  the likelihood) and `loglik`.
+- `flip_probabilities(f, tauA, dt)`: the exact per-sample flip
+  probabilities, now used by both `telegraph_traces` and the decoder.
+- `fit_telegraph_psd(..., n_avg=n)` corrects the known offset of a
+  log-averaged periodogram and uses its exact scatter; the PSD planner
+  uses the same scatter (Example 8).
+- `fit_hmm` starts from the best two-group split of the samples, which
+  works for traces the old median split could not handle, and the
+  decoder runs about 10 times faster.
+
+The corrections, with before/after numbers, are listed under
+[Corrections in earlier versions](#corrections-in-earlier-versions).
 
 ## What is in the package
 
@@ -524,8 +629,9 @@ without them.
 - `tau_activated`, `noneq_penalty` -- an energy-dependent (thermally
   activated) correlation time, and the resolution penalty of an excess,
   non-equilibrium occupation.
-- `telegraph_traces`, `psd_single_sided` -- Monte Carlo telegraph
-  signals and their periodogram.
+- `telegraph_traces`, `psd_single_sided`, `flip_probabilities` --
+  Monte Carlo telegraph signals (exact at any time step), their
+  periodogram, and the exact per-sample flip probabilities.
 - `allan_variance`, `avar_exponential`, `avar_white` -- the Allan
   variance of data, and its closed forms for exponentially correlated
   and white noise.
@@ -537,6 +643,10 @@ without them.
   `energy_resolution_analytic_A`, `nep_spectrum`, plus `Ce`, `Gep`,
   `tau_th`, `LJ` and `participation` (the share of the resonator's
   inductance that the junction supplies).
+- `matched_filter_sigma(P, Q, W, tau_th, tauA)` -- the closed-form
+  energy resolution behind `energy_resolution`, from the three noise
+  levels of `nep_spectrum` (phonon, occupation, readout) at zero
+  frequency.
 - `matched_Tc`, `matched_recipe` -- the matched-level design.
 - `click_template`, `click_monte_carlo` -- the response to one photon,
   noiseless and with noise.
@@ -550,7 +660,8 @@ without them.
 - `fit_telegraph_psd`, `TelegraphPSDFit`, `telegraph_psd_model` -- the
   noise-spectrum fit, its result, and the model spectrum.
 - `fit_hmm`, `TelegraphHMM` -- the readout-trace decoder
-  (`posterior`, `viterbi`, `forward_backward`, `rates`, `from_rates`).
+  (`posterior`, `viterbi`, `forward_backward`, `rates`, `from_rates`,
+  and `uncertainties`, `score`, `loglik` for error bars).
 - `load_ic_csv`, `save_ic_csv` (header `T_K,Ic_A` or
   `T_K,Ic_A,sigma_Ic_A`), `load_trace_csv`, `save_trace_csv` (header
   `t_s,y`), `validate_ic_data` -- the file formats and unit checks.
@@ -609,13 +720,24 @@ gives its inputs, units and conventions.
 - `steady_temperature` gets a negative power; `nep_spectrum` gets a
   negative or non-finite frequency; `click_template` and
   `two_temperature_click` get a scenario other than `"C"` or `"T"`.
-- `telegraph_traces` uses a time step too coarse for the rates (a flip
-  probability per step of 0.12 or more). This check is a Python
-  `assert`, so it is skipped under `python -O`.
+- a `SensorBudget` method gets a temperature that is not positive, or
+  one at or above `Tc` where the gap has closed (only `Ce`, `Gep`,
+  `tau_th` and `dT_phonon` work above `Tc`), a non-positive `tauA` or
+  averaging time, a `which` other than `"L"` or `"I"`, or a negative
+  readout floor. (Up to 0.10.x these gave a `ZeroDivisionError` or a
+  silent NaN.) `matched_Tc` gets a non-positive `T0`.
+- `telegraph_traces` and `flip_probabilities` get `f` outside [0, 1]
+  or a non-positive `tauA` or `dt`. (Up to 0.10.x `telegraph_traces`
+  instead refused coarse time steps, with a Python `assert`.)
+- `fit_hmm` gets fewer than 4 samples, non-finite samples or a
+  constant trace; `forward_backward` and `viterbi` get an empty trace; `rates` gets flip probabilities adding up to 1 or
+  more (successive samples anti-correlated: no telegraph process does
+  that); `uncertainties` finds that the likelihood is not at a
+  maximum or does not determine all five parameters.
 
 ## How the results are checked
 
-88 automated tests run on every push and pull request, on Python 3.9,
+131 automated tests run on every push and pull request, on Python 3.9,
 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.9 with the
 oldest NumPy (1.24.0) and SciPy (1.10.0) the package allows. The
 numerical checks compare the package with an exact formula, a second
@@ -654,6 +776,14 @@ check that refusals fire. The main checks:
 - Telegraph Monte Carlo: the plateau within 10 %, half the plateau at
   the knee within 0.12, and the variance of 50-second averages equals
   `S(0)/(2t)` within 25 %.
+- Exact sampling: the flip probabilities equal the matrix exponential
+  of the two-state rate matrix (computed by SciPy) to 1e-9 relative,
+  for occupations 0.02 to 0.9 and time steps from 1e-6 to 7 `tau`, and
+  reduce to the first-order values for tiny steps (1e-5); traces
+  sampled at `dt = tau` have autocorrelation `e^-k` at lags 1 to 3
+  within 0.01 (the first-order rule would give 0).
+- Periodogram: `sum(S) df` equals the variance of the data to 1e-12
+  (Parseval), for even and odd lengths.
 - `occupation_heat_capacities`: the bound part equals the level sum
   `C_A` of `FiniteLJunction` within 1e-5 (two code paths); the
   continuum part is exactly 0 at zero length; for Ti/Al/Au at 0.3 `Tc`
@@ -679,9 +809,17 @@ check that refusals fire. The main checks:
   `sqrt(1 + (2 pi f tau_th)^2)` (1e-12); the zero-frequency ratio of
   the two equals the documented criterion (1e-12) and doubles when
   `tauA` doubles (1e-12); the readout part rises faster.
-- The energy resolution built from the NEP equals the one from
-  `energy_resolution` to 1e-10, with and without a readout floor, for
-  both readouts `"L"` and `"I"` (two code paths).
+- Energy resolution: the closed form equals adaptive numerical
+  integration of `4 / NEP^2` over all frequencies to 1e-8 (two code
+  paths), with and without a readout floor, for both readouts `"L"`
+  and `"I"` and two correlation times; the bare closed form matches
+  the same integration to 1e-9 for five sets of noise levels, and two
+  exact limits (occupation noise only; readout floor only) to 1e-14.
+  The 0.10.x band-limited integral (`method="grid"`) still equals the
+  NEP integral on its own grid to 1e-10, and lies 3.3 % and 10.7 %
+  above the closed form for `tauA` = 1 us and 1 ns.
+- Out-of-range temperatures, correlation times and averaging times
+  are refused.
 
 **Recipes and thermal model**
 
@@ -695,7 +833,9 @@ check that refusals fire. The main checks:
 
 **Single photons**
 
-- Matched design: `Delta(T0) / (kB T0) = 2.3994` to 1e-9.
+- Matched design: `Delta(T0) / (kB T0) = 2.3994` to 1e-9, both from
+  the gap equation and inside the `SensorBudget` of the matched recipe
+  (0.10.x gave 2.39954 there).
 - The starting electron temperature satisfies
   `gamma (T_pk^2 - T0^2) / 2 = E_gamma` to 1e-12 (this checks the
   starting point, not the time integration).
@@ -723,11 +863,39 @@ check that refusals fire. The main checks:
 - Spectrum fit: noise-free data return `S0` and `tau` within 1e-6 and
   the floor within 1e-4; on telegraph Monte Carlo, `tau` within 15 %,
   the variance within 15 % of the trace variance, `S0` within 20 %.
+- Spectrum fit with `n_avg`: the offset correction changes `tau` by
+  less than 1e-7 and scales `S0` and the floor by exactly
+  `exp(ln n - psi(n))` (1e-7); on 300 spectra with the exact scatter
+  of an average of two periodograms, the mean of `ln(S0_fit/S0)` is
+  within 3 standard errors of 0 (0.10.x: -0.27), the floor within
+  10 % (it keeps a bias of about -5 % from the fit's nonlinearity),
+  the mean `chi2/dof` within 0.06 of 1 (0.10.x: 1.29), and the scatter
+  of `tau` within 20 % of the planned error bar.
 - Decoder: above 99.9 % of samples correct at noise 0.15; at noise 0.5
   the stated confidence matches the real accuracy within 0.01; the fit
   finds `f` and `tau` within 4 statistical errors and the levels and
   noise within 0.02; the log-likelihood never decreases (within 1e-6
-  relative).
+  relative). `rates` inverts `from_rates` to 1e-9, also at
+  `dt = 2 tau`.
+- Decoder speed-up: the new recursions give the same posteriors,
+  transition probabilities and log-likelihood as the 0.10.1 matrix
+  code (kept in the tests) to 1e-12, and the same Viterbi path.
+- Decoder error bars: the exact gradient equals finite differences of
+  the log-likelihood to 1e-5; at high signal-to-noise the error bars
+  of the flip probabilities equal the binomial closed form
+  `sqrt(p (1 - p) / N)` within 0.5 %; over 30 simulated traces the
+  errors of `tau` and `f`, divided by each trace's own error bar,
+  have a standard deviation between 0.65 and 1.4 and a mean within
+  0.6 of zero; at `dt = tau/2` the fit finds `tau` within 4 error bars
+  (the 0.10.x conversion is more than 20 % off on the same fit).
+- Decoder robustness: with one 200-sigma outlier (0.10.1 returned NaN)
+  the log-likelihood equals a log-space forward recursion to 1e-10 and
+  the fit runs with a non-decreasing likelihood; a single-sample trace
+  matches its closed form to 1e-14.
+- Decoder start: a noise-free trace filled 90 % of the time (which
+  0.10.x could not start on) returns both levels to 1e-6 and the exact
+  state sequence; the two-group split equals a brute-force search over
+  all thresholds to 1e-12.
 - Files: Ic files round-trip exactly; trace files round-trip the
   samples exactly and `dt` within 1e-18 s.
 
@@ -738,14 +906,62 @@ check that refusals fire. The main checks:
   `Tc` is flagged and its `Tc` error is more than 10 times larger; the
   greedy design is never worse than 20 random choices.
 - Planned spectrum-fit error bars equal the fit's within 0.1 %; the
-  `1/sqrt(n_avg)` scaling holds to 1e-9; `averages_for_tau` returns the
+  `sqrt(psi'(n_avg))` scaling holds to 1e-9; `averages_for_tau` returns the
   smallest sufficient number; 300 simulated spectra scatter in `tau`
   within 20 % of the plan; a band from `psd_band_for_tau` is accepted
   by the fit and returns `tau` within 1e-4.
 
 ## Corrections in earlier versions
 
-**0.10.1 (this release) fixes four problems in 0.10.0.**
+**0.11.0 (this release) corrects five results of 0.10.1.** Each
+change below alters numbers that earlier versions printed.
+
+- **Energy resolution.** `SensorBudget.energy_resolution` integrated
+  numerically between two cut-off frequencies. Above the upper cut-off
+  the integrand still carries weight (it falls only as `1/f^2` while
+  occupation noise dominates, and stays flat where phonon noise
+  dominates), so the result was too large: by 3.3 % in Example 1
+  (1.810e-22 J before, 1.752e-22 J now), by 10.7 % for Ti/Al/Au at
+  0.3 `Tc` with `tauA` = 1 ns, and by 18 % with `which="I"` there.
+  The integral now has a closed form. `method="grid"` gives the old
+  numbers.
+- **Correlation time from sampled traces.** `TelegraphHMM.rates`
+  turned the per-sample flip probability `s = p_up + p_dn` into
+  `tau = dt / s`, which is right only for samples much closer than
+  `tau`. For a process running in continuous time and read every
+  `dt`, the exact relation is `tau = -dt / ln(1 - s)`. The old value
+  was too long by 2.5 % at `dt = 0.05 tau` and by 27 % at
+  `dt = 0.5 tau`. `f` was not affected. The simulator
+  `telegraph_traces` used the matching first-order flip
+  probabilities, so the package agreed with itself but not with a
+  real, continuously running process. It now samples the continuous
+  process exactly, and any time step is allowed. Examples 5 and 6
+  therefore print slightly different numbers (Example 6 printed
+  `f = 0.297, tau = 0.977 ms` before).
+- **Spectrum fit with `n_avg`.** The fit treated the logarithm of an
+  averaged periodogram as unbiased with variance `1/n_avg`. Its mean
+  is in fact low by `psi(n) - ln n` and its variance is `psi'(n)`, so
+  `S0` and the floor were low by a factor 0.56 (n = 1), 0.76 (n = 2),
+  0.88 (n = 4) or 0.992 (n = 64), and `chi2` high by 64 % (n = 1)
+  or 0.8 % (n = 64). `tau` is unchanged. The planner now uses the
+  same scatter: Example 4 prints 15.56 us and 1709 averages (15.50 us
+  and 1708 before).
+- **Matched design.** `matched_Tc` solved the gap equation with
+  `Delta0 = 1.7639 kB Tc`, while `Recipe` (and so the budget of
+  `matched_recipe`) uses 1.764. The budget then saw
+  `Delta(T0)/(kB T0) = 2.39954` instead of the stated 2.3994;
+  `matched_Tc(0.05)` moves from 0.0776088 K to 0.0776059 K.
+- **Periodogram.** `psd_single_sided` doubled the Nyquist bin (the
+  highest frequency, for an even number of samples), so the spectrum
+  held slightly more than the variance of the data.
+
+Also: `SensorBudget` methods refuse temperatures at or above `Tc`
+(they raised `ZeroDivisionError`), zero or negative temperatures, and
+non-positive `tauA` (a negative value gave NaN); and the decode module
+docstring promised likelihood-based error bars that did not exist
+until `uncertainties`.
+
+**0.10.1 fixes four problems in 0.10.0.**
 
 - **NumPy 1.x.** The package allows NumPy 1.24 and newer, but four
   integrals called `numpy.trapezoid`, which exists only from NumPy 2.0.
@@ -811,11 +1027,23 @@ No earlier release records a correction. The full history is in
   your measured phonon parameters.
 - `click_monte_carlo` results are statistics-limited; the tests check
   only ordering relations.
-- `fit_hmm` models Gaussian readout noise. Its default start splits the
-  trace at the median; a trace with more than half of its samples
-  exactly at the maximum value (for example a noise-free trace that is
-  filled most of the time) makes that start fail with an error about
-  flip probabilities. Pass `init=` in that case.
+- `fit_hmm` models Gaussian readout noise with the same width in both
+  states, and assumes the upper readout level means "filled". Its
+  error bars (`uncertainties`) are the large-sample estimate: the
+  tests check their calibration on traces with a few hundred flips;
+  with only a handful of flips they are rough. A far outlier no longer
+  breaks the computation, but the Gaussian model widens its fitted
+  noise to absorb it (one 200-sigma sample in 4000 raised the fitted
+  noise from 0.20 to 0.70 in a test trace): remove glitches first.
+- `fit_telegraph_psd` can remove the periodogram offset only when you
+  give `n_avg`, one number for all points (without it, `S0` and the
+  floor are low by `exp(psi(n) - ln n)` for `n` averages). Even with
+  it, the fitted floor kept a bias of about -5 % at `n_avg = 2` in the
+  tests (-1 % at 8). The fit uses the continuous-time Lorentzian; the
+  spectrum of a sampled trace also contains folded-back (aliased)
+  noise near the highest frequency, which the fit does not model.
+- `SensorBudget.energy_resolution` assumes an ideal matched filter over
+  all frequencies; a real readout with a finite bandwidth does worse.
 - The greedy temperature design is a good heuristic, not a proof of
   the best subset.
 
