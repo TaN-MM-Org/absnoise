@@ -24,7 +24,10 @@ def test_phonon_nep_is_mathers_flat_closed_form():
 def test_matched_filter_identity_reproduces_energy_resolution():
     """sigma_E = [4 int df / NEP^2]^(-1/2) computed from the NEP
     closed forms must equal the package's own signal-chain integral
-    -- two independent code paths through the same physics."""
+    -- two independent code paths through the same physics. Both are
+    evaluated on the same truncated grid here (method="grid"); the
+    default closed form of 0.11.0 is checked against quadrature over
+    all frequencies in tests/test_v011.py."""
     for S_ro in (0.0, 1e-22):
         tth = B.tau_th(T)
         fmax = 10.0 / (2 * np.pi * min(TAUA, tth))
@@ -34,7 +37,8 @@ def test_matched_filter_identity_reproduces_energy_resolution():
         nep = B.nep_spectrum(T, TAUA, f, S_ro_y=S_ro)
         sig_from_nep = 1.0 / np.sqrt(
             4.0 * trapezoid(1.0 / nep["total"] ** 2, f))
-        sig_direct = B.energy_resolution(T, TAUA, S_ro_y=S_ro)
+        sig_direct = B.energy_resolution(T, TAUA, S_ro_y=S_ro,
+                                         method="grid")
         assert abs(sig_from_nep - sig_direct) / sig_direct < 1e-10
 
 

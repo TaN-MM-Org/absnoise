@@ -14,11 +14,19 @@ def _matched_budget(T0=0.05):
 
 
 def test_matched_condition_is_exact():
-    # Delta*(T0) from the solved gap equation equals 2.3994 kB T0
+    # Delta*(T0) from the solved gap equation equals 2.3994 kB T0, in
+    # the Delta0 = 1.764 kB Tc convention of Recipe, and so in the
+    # budget of the matched recipe (before 0.11.0 the solve used
+    # 1.7639 and the budget saw 2.39954)
+    from absnoise.constants import BCS_RATIO
     for T0 in (0.05, 0.1):
         Tc = matched_Tc(T0)
-        D = gap_bcs(T0, Tc, 1.7639 * KB * Tc)
+        D = gap_bcs(T0, Tc, BCS_RATIO * KB * Tc)
         assert abs(D / (KB * T0) - 2.3994) < 1e-9
+        b = SensorBudget(matched_recipe(T0, W=5.3e-6, L=0.5e-6))
+        assert abs(b.sj.Delta(T0) / (KB * T0) - 2.3994) < 1e-9
+    with pytest.raises(ValueError):
+        matched_Tc(0.0)
 
 
 def test_energy_conservation_of_the_exponential_integrator():

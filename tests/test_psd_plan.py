@@ -1,14 +1,15 @@
 """PSD-averaging-planner anchors: the planned error bars equal
 `fit_telegraph_psd`'s reported error bars on noiseless synthetic data
 at the same averaging depth (two code paths of one matrix, in the
-fit's own log-space parameterization); the 1/sqrt(n_avg) scaling is
-exact; the closed-form averaging inversion is verified on both sides
+fit's own log-space parameterization); the sqrt(psi'(n_avg))
+scaling is exact (1/sqrt(n_avg) up to 0.10.x); the closed-form averaging inversion is verified on both sides
 of the target; seeded Monte Carlo with the multiplicative periodogram
 scatter matches the planned tau error bar; and the planner refuses,
 in advance and with the same explanations, exactly the bands the fit
 refuses after the fact."""
 import numpy as np
 import pytest
+from scipy.special import digamma, polygamma
 
 from absnoise import (averages_for_tau, fit_telegraph_psd,
                       plan_psd_measurement, telegraph_psd_model)
@@ -19,8 +20,13 @@ F = np.geomspace(50.0, 20000.0, 48)         # knee ~531 Hz, well inside
 
 def test_plan_matches_fit_two_paths():
     n_avg = 64
-    S = telegraph_psd_model(F, S0, TAU, FLOOR)
+    # the noise-free stand-in for an average of n_avg periodograms is
+    # the model times exp(psi(n) - ln n): the expected value of the
+    # logarithm (0.11.0; the fit removes that offset)
+    S = telegraph_psd_model(F, S0, TAU, FLOOR) \
+        * np.exp(digamma(n_avg) - np.log(n_avg))
     fit = fit_telegraph_psd(F, S, fit_floor=True, n_avg=n_avg)
+    assert abs(fit.S0 - S0) < 1e-6 * S0
     assert abs(fit.tau_s - TAU) < 1e-6 * TAU
     plan = plan_psd_measurement(F, n_avg, S0, TAU, FLOOR)
     assert plan["identifiable"]
@@ -30,10 +36,13 @@ def test_plan_matches_fit_two_paths():
 
 
 def test_scaling_exact_in_averages():
+    # every error bar scales as sqrt(psi'(n_avg)) (0.11.0; the 0.10.x
+    # 1/sqrt(n_avg) is its large-n limit: ratio 2.0237 here, not 2)
     p1 = plan_psd_measurement(F, 16, S0, TAU, FLOOR)
     p2 = plan_psd_measurement(F, 64, S0, TAU, FLOOR)
+    ratio = np.sqrt(polygamma(1, 16) / polygamma(1, 64))
     for name in ("S0", "tau_s", "floor"):
-        assert abs(p1["sigma"][name] / p2["sigma"][name] - 2.0) \
+        assert abs(p1["sigma"][name] / p2["sigma"][name] - ratio) \
             < 1e-9
 
 

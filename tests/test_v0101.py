@@ -27,18 +27,22 @@ def test_integrals_work_without_numpy_trapezoid(monkeypatch):
     """NumPy 1.x has `trapz` and no `trapezoid`; the package allows
     NumPy >= 1.24, so its integrals must not need `trapezoid`."""
     D = RECIPES[1].Delta
-    ref_E = B.energy_resolution(T, TAUA)
+    # method="grid" is the trapezoid path (the default closed form of
+    # 0.11.0 has no integral)
+    ref_E = B.energy_resolution(T, TAUA, method="grid")
     ref_F = continuum_free_energy(1.0, 0.5, 1.0 / D, D, T)
     fn = getattr(np, "trapezoid", None) or getattr(np, "trapz")
     monkeypatch.delattr(np, "trapezoid", raising=False)
     monkeypatch.setattr(np, "trapz", fn, raising=False)
-    assert B.energy_resolution(T, TAUA) == ref_E
+    assert B.energy_resolution(T, TAUA, method="grid") == ref_E
     assert continuum_free_energy(1.0, 0.5, 1.0 / D, D, T) == ref_F
 
 
 def test_energy_resolution_current_readout_matches_nep():
     """which="I": the matched-filter identity built from `nep_spectrum`
-    must reproduce `energy_resolution`, as it does for "L"."""
+    must reproduce `energy_resolution`, as it does for "L". On the
+    0.10.x grid this compares with method="grid"; the default closed
+    form is checked against quadrature in tests/test_v011.py."""
     tth = B.tau_th(T)
     fmax = 10.0 / (2 * np.pi * min(TAUA, tth))
     f = np.logspace(np.log10(1.0 / (200 * 2 * np.pi * max(TAUA, tth))),
@@ -48,7 +52,7 @@ def test_energy_resolution_current_readout_matches_nep():
         sig_from_nep = 1.0 / np.sqrt(
             4.0 * trapezoid(1.0 / nep["total"] ** 2, f))
         sig_direct = B.energy_resolution(T, TAUA, S_ro_y=S_ro,
-                                         which="I")
+                                         which="I", method="grid")
         assert abs(sig_from_nep - sig_direct) / sig_direct < 1e-10
 
 
