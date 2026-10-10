@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.12.1 (2026-10-10)
+
+Citation corrections and packaging.
+
+### Fixed (documentation)
+
+- `ep_power` docstring: Lee et al., Nature 586, 42 (2020) fit Sigma =
+  2.14, 2.04, 2.74 and 3.30 W m^-2 K^-3, so the range is 2.04-3.30, not
+  2.1-3.3. The default of 2.0 is unchanged.
+- `constants.py`: the graphene mass density (7.6e-7 kg/m^2) and LA
+  sound velocity (2.0e4 m/s) now cite E. H. Hwang and S. Das Sarma,
+  Phys. Rev. B 77, 115449 (2008), whose values they match. The comment
+  on the deformation potential called 18 eV "mid-range of 10-30 eV";
+  it now says that the paper uses 19 eV and quotes 10-30 eV, and that
+  18 eV lies in that range. None of the three constants is used by the
+  package, and their values are unchanged.
+- Packaging: the license is now given as the SPDX expression
+  `license = "Apache-2.0"` with `license-files = ["LICENSE"]`, and the
+  old license table and license classifier are gone. Building no longer
+  prints setuptools' deprecation warnings (their support ends on
+  2027-02-18). Building from source now needs setuptools 77 or newer;
+  installing the package is unchanged.
+
 ## 0.12.0 (2026-10-10)
 
 Two tools for working with your own measurements (error bars on any

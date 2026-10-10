@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "absnoise"
-version = "0.12.0"
+version = "0.12.1"
 description = "Andreev-bound-state occupation noise and detector budgets for proximity Josephson junctions"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Tanvir M. Mahim", email = "tanvir.mahim@bracu.ac.bd" }]
 requires-python = ">=3.9"
 keywords = ["Andreev bound states", "Josephson junction", "graphene", "thermal detector", "bolometer", "calorimeter", "occupation noise", "superconductivity"]
@@ -15,7 +16,6 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
   "Topic :: Scientific/Engineering :: Physics",
 ]
