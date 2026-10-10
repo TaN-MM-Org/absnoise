@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.12.0 (2026-10-10)
+
+Two tools for working with your own measurements (error bars on any
+budget number from an Ic(T) fit, and a check that a readout trace
+follows the single-rate telegraph model), and five corrections, each
+found by a test that fails on 0.11.0. No function was renamed or
+removed; every README example of 0.11.0 prints the same output.
+
+### Added
+
+- `IcFit.propagate(func, xi, L, W, Vbg, Rn, ...)`: one-standard-
+  deviation error (and covariance) of any number computed from the
+  fitted junction, `func(recipe)`, from the fit covariance of
+  (Ic0, Tc, tau), with the measured geometry held fixed. Sigma points
+  at plus and minus one standard deviation along the principal axes of
+  the covariance; exact for a function linear in the parameters.
+  Refuses when the second-order change over one standard deviation
+  exceeds `max_nonlinearity` (default 0.1) times the error bar, when a
+  parameter would leave its range within one standard deviation, or
+  when `func` returns a non-finite value. README Example 9.
+- `markov_dwell_test(y, model, n_boot=200, seed=0, min_dwells=30)`:
+  tests whether the stays of a decoded trace follow the geometric law
+  of a single-rate Markov process, with the dispersion index
+  var(k) / (mean(k) (mean(k) - 1)) (1 for a geometric law) and a
+  parametric bootstrap that simulates and decodes the fitted model, so
+  decoding errors enter the reference too. Refuses fewer than
+  `min_dwells` complete stays per state and a mean stay below 2
+  samples. README Example 10.
+- `dwell_times(path, dt=1.0)`: the complete stays in each state of a
+  0/1 path (first and last stay left out, since the record cuts them).
+- README Examples 9 and 10 and a "What changed in 0.12.0" section.
+
+### Fixed
+
+- `gap_bcs` near Tc. The spline in t = T/Tc ended at t = 0.9995 and
+  returned 0 above it, and a cubic spline cannot follow the
+  square-root closing of the gap. Before -> after (u = Delta/Delta0):
+  t = 0.9997: 0 -> 0.030723; t = 0.9995: 0 -> 0.039328;
+  t = 0.999: 0.054884 -> 0.055252; t = 0.998: 0.077956 -> 0.077854;
+  t = 0.995: 0.1227057 -> 0.1227072. The new values are direct
+  solutions of the same gap equation (agreement better than 1e-9),
+  taken for t >= 0.99 from a table of u / sqrt(1 - t/t1) built from the
+  Matsubara-sum form of the equation. Below t = 0.99 nothing changes.
+  `SensorBudget` no longer refuses 0.9995 Tc <= T < Tc as "at or above
+  Tc".
+- `avar_exponential` lost its accuracy for T << tau, where the four
+  terms of the closed form cancel to order (T/tau)^3. With
+  var = tau = 1: T = 1e-4: 6.66578e-5 -> 6.66617e-5; T = 1e-5:
+  7.77e-6 -> 6.67e-6; T = 1e-6: -1.1e-4 (negative) -> 6.67e-7. Below
+  T = tau/2 the bracket is now summed as its Taylor series; for
+  T >= tau/2 the computation is unchanged.
+- `ic_model` and `ShortJunction.Ic` (`current_phase`) returned NaN at
+  and above Tc; they return 0. `plan_ic_measurement` with one planned
+  temperature above Tc (Example 4's 8 temperatures plus 0.8 K):
+  identifiable False, no error bars -> identifiable True with the same
+  error bars as without that point (sigma(Tc) = 6.06 mK).
+- `absnoise.levels.continuum_free_energy` had the opposite sign of the
+  continuum free energy used by `JunctionModel`, `continuum_share` and
+  `occupation_heat_capacities`. In the test case (c Delta = 1.5,
+  tau = 0.7, T = 0.3 Tc) F_bound + F_cont jumped by 2.013 Delta across
+  the 0.06 rad where a bound level leaves for the continuum; it now
+  changes by 0.007 Delta (the bound part alone jumps by 1.010 Delta).
+  At phi = 1: -0.587970 Delta -> +0.587970 Delta. `JunctionModel` is
+  unchanged.
+- `plan_psd_measurement` truncated `n_avg` with int(), so a
+  non-integer `n_avg`, which `fit_telegraph_psd` accepts, was planned
+  as the integer below. Example 4's band with n_avg = 1.5:
+  sigma(tau) 159.0 us -> 119.9 us (the fit reports 119.9 us).
+
+### Changed
+
+- `click_template` refuses a negative or non-finite deposited energy
+  and a non-positive tauA or T0 (a negative deposit started below T0
+  and never relaxed); a zero deposit returns the flat template with
+  `energy_residual` 0 instead of raising ZeroDivisionError.
+- `avar_exponential` refuses non-finite var, tau_c and averaging
+  times.
+- `plan_psd_measurement` refuses a non-finite `n_avg`.
+- Docstrings of `ic_model`, `ShortJunction.current_phase`, `gap_bcs`
+  and `continuum_free_energy` state the behavior at and above Tc, the
+  near-Tc table and the sign convention.
+
+### Tests
+
+- New `tests/test_v012.py` (29 tests). Fixes: the gap near Tc against
+  direct solutions of the gap equation in integral form (1e-9) and in
+  Matsubara-sum form (1e-9), the two forms against each other (1e-9),
+  the Ginzburg-Landau limit derived from the sum (2e-5), continuity at
+  0.99 Tc and unchanged values below; Ic exactly 0 at and above Tc and
+  a plan with a point above Tc equal to the plan without it (1e-12);
+  `avar_exponential` against the defining integral rewritten without
+  cancellation (1e-9, T/tau from 1e-8 to 3) and its Taylor series
+  (1e-12); continuity of F_bound + F_cont at a bound-level exit and
+  agreement of `continuum_free_energy` with the `JunctionModel` path
+  (5e-4); planned against fitted error bars for n_avg = 1.5, 2.5, 7.3
+  (1e-3); `click_template` input checks. All of these fail on 0.11.0.
+  Features: `propagate` exact for a linear function (1e-10), the
+  quadratic closed form (1e-9), and Monte Carlo over 400 parameter
+  sets (12 %); dwell times counted by hand, the geometric identity of
+  the dispersion index, the closed-form statistics of the simulated
+  reference paths, p-value calibration on 12 Markov traces and
+  detection of a two-time-scale trace.
+- 160 tests in total (131 in 0.11.0).
+
 ## 0.11.0 (2026-09-30)
 
 Exact where 0.10.x approximated: the matched-filter energy resolution

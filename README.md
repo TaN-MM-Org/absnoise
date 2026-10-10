@@ -41,6 +41,7 @@ number that looks fine but is not.
 - [Install](#install)
 - [Units and conventions](#units-and-conventions)
 - [Examples](#examples) (each with the output it prints)
+- [What changed in 0.12.0](#what-changed-in-0120)
 - [What changed in 0.11.0](#what-changed-in-0110)
 - [What is in the package](#what-is-in-the-package)
 - [When it refuses, and why](#when-it-refuses-and-why)
@@ -157,7 +158,7 @@ run `pip install -e .[test]`, then `pytest`.
 ## Examples
 
 Each example below runs as written, and the output shown is what it
-printed with absnoise 0.11.0 (Python 3.11, NumPy 2.4.6, SciPy 1.17.1).
+printed with absnoise 0.12.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
 Values not taken from the shipped recipes -- correlation times,
 geometries, noise levels -- are illustrative, not measurements.
 
@@ -562,6 +563,156 @@ is larger (44 % for `n_avg = 1`). `n_avg` must be the number of
 independent periodograms behind every point: do not also average
 neighbouring frequencies, or pass that larger number.
 
+### 9. Error bars on the budget from your Ic(T) fit
+
+```python
+import numpy as np
+from absnoise import ic_model, fit_ic_curve, SensorBudget
+
+# The synthetic Ic(T) measurement of Example 3, fitted the same way.
+T = np.linspace(0.05, 0.65, 10)
+rng = np.random.default_rng(1)
+sigma = 0.02e-6
+Ic = ic_model(T, 2.0e-6, 0.75, 0.78) + rng.normal(0.0, sigma, T.size)
+fit = fit_ic_curve(T, Ic, sigma_Ic=sigma)
+
+geometry = dict(xi=5e-6, L=0.2e-6, W=2e-6, Vbg=30.0, Rn=50.0)  # yours
+T_op, tauA = 0.2, 1e-6                     # operating point (illustrative)
+
+lj = fit.propagate(lambda r: SensorBudget(r).LJ(T_op), **geometry)
+print(f"L_J = {lj['value'] * 1e9:.4f} +- {lj['sigma'] * 1e9:.4f} nH")
+dT = fit.propagate(lambda r: SensorBudget(r).dT_andreev(T_op, tauA, 1.0)[0],
+                   **geometry)
+print(f"Andreev resolution in 1 s: {dT['value'] * 1e6:.2f} "
+      f"+- {dT['sigma'] * 1e6:.2f} uK")
+sE = fit.propagate(lambda r: SensorBudget(r).energy_resolution(T_op, tauA),
+                   **geometry)
+print(f"energy resolution: {sE['value']:.3e} +- {sE['sigma']:.1e} J "
+      f"(nonlinearity {sE['nonlinearity']:.3f})")
+
+try:                                       # 10 mK below the fitted Tc
+    fit.propagate(lambda r: SensorBudget(r).LJ(0.743), **geometry)
+except ValueError as err:
+    print("refused:", err)
+```
+
+```
+L_J = 0.2264 +- 0.0046 nH
+Andreev resolution in 1 s: 44.23 +- 0.79 uK
+energy resolution: 1.782e-22 +- 3.2e-24 J (nonlinearity 0.007)
+refused: func is too nonlinear over the fit's error bars: the second-order change over one standard deviation is 0.387 times the first-order error bar (limit 0.1). A first-order error bar would mislead; sample (Ic0, Tc, tau) from `cov` and look at the spread of func instead
+```
+
+`propagate` (new in 0.12.0) carries the error bars of the Ic(T) fit
+into any number the package computes from the fitted junction. You
+pass a function of a `Recipe` and your measured geometry. The geometry
+stays fixed; only `Ic0`, `Tc` and `tau` vary. The method moves the
+three parameters by one standard deviation, in both directions, along
+each principal direction of the fit's covariance, and combines the
+changes of the result. For a result that depends linearly on the
+parameters, this is exactly the usual first-order error bar. The tests
+check it against that exact result, against a quadratic closed form,
+and against 400 parameter sets drawn at random from the covariance.
+
+`nonlinearity` is the second-order change over one standard deviation,
+in units of the error bar. Above 0.1 (the default limit) the call is
+refused, because one error bar would then hide a skewed or shifted
+spread. Here that happens 10 mK below the fitted `Tc`, where `L_J`
+rises steeply. The phonon parameters (`sigma`, `delta`) and the
+readout settings of `SensorBudget` carry no error bars here; only the
+fit's do.
+
+### 10. Is the readout trace a single-rate telegraph process?
+
+```python
+import numpy as np
+from absnoise import telegraph_traces, fit_hmm, markov_dwell_test
+
+rng = np.random.default_rng(2)
+dt = 5e-5                                  # 50 us samples, noise 0.3
+
+# A Markov occupation: f = 0.3, tau = 1 ms (illustrative values).
+n = telegraph_traces(0.3, 1e-3, dt, 20000, 1, rng)[:, 0]
+y = n + rng.normal(0.0, 0.3, n.size)
+model, _ = fit_hmm(y)
+res = markov_dwell_test(y, model, n_boot=500, seed=0)
+print(f"Markov trace:    p = {res['p_value']:.2f}, dispersion "
+      f"{res['dispersion'][0]:.2f} (empty), {res['dispersion'][1]:.2f} (filled)")
+
+# Filled stays with two time scales: 0.25 ms or 3 ms, equal odds.
+parts, s = [], 0
+while sum(len(p) for p in parts) < 20000:
+    mean = 47 if s == 0 else (5 if rng.random() < 0.5 else 60)
+    parts.append(np.full(rng.geometric(1 / mean), s))
+    s ^= 1
+n2 = np.concatenate(parts)[:20000]
+y2 = n2 + rng.normal(0.0, 0.3, n2.size)
+model2, _ = fit_hmm(y2)
+res2 = markov_dwell_test(y2, model2, n_boot=500, seed=0)
+print(f"two time scales: p = {res2['p_value']:.3f}, dispersion "
+      f"{res2['dispersion'][0]:.2f} (empty), {res2['dispersion'][1]:.2f} (filled)")
+print("complete stays:", res2["n_dwells"])
+```
+
+```
+Markov trace:    p = 0.50, dispersion 0.96 (empty), 1.11 (filled)
+two time scales: p = 0.008, dispersion 0.87 (empty), 2.09 (filled)
+complete stays: {0: 207, 1: 207}
+```
+
+`fit_hmm` assumes one Markov process: every stay in a state ends with
+the same probability per sample, so the stays follow an exponential
+law (geometric, counted in samples) with one correlation time. Several
+trap states, slow drifts of the rates or a dead time break this, and
+then the fitted `f` and `tau` describe no single process.
+`markov_dwell_test` (new in 0.12.0) decodes the trace with `viterbi`,
+measures every complete stay, and computes the dispersion index
+`var / (mean (mean - 1))` of the stay lengths in samples, which is 1
+for a geometric law. It compares this number with 500 traces simulated
+from the fitted model and decoded in the same way, so decoding errors
+(short stays missed in the noise) affect data and reference alike.
+
+In the first trace nothing is found (p = 0.50). In the second, the
+filled stays are far too spread out (dispersion 2.09), and the test
+rejects the single-rate model. 0.008 is the smallest p-value that 500
+simulated traces can give (4/501); ask for more if you need to resolve
+smaller values. A large p-value means that no departure was found, not
+that the model is proven. `dwell_times` returns the stays themselves,
+for a histogram.
+
+## What changed in 0.12.0
+
+New:
+
+- `IcFit.propagate(func, ...)`: error bars on any number computed from
+  a fitted junction, from the covariance of the Ic(T) fit
+  (Example 9). It refuses when the result is too nonlinear over the
+  error bars for one error bar to describe it.
+- `markov_dwell_test(y, model)` and `dwell_times(path, dt)`: a check
+  that a decoded readout trace follows the single-rate telegraph model
+  the decoder assumes, calibrated by simulating the fitted model
+  (Example 10).
+
+Corrected (details and before/after numbers under
+[Corrections in earlier versions](#corrections-in-earlier-versions)):
+
+- `gap_bcs` between 0.99 `Tc` and `Tc` (it returned 0 from 0.9995 `Tc`
+  on, and was up to 0.7 % off just below).
+- `avar_exponential` for averaging times much shorter than the
+  correlation time (it lost all accuracy, and turned negative at
+  `T = 1e-6 tau`).
+- `ic_model` and `ShortJunction.Ic` at and above `Tc` (NaN, now 0), and
+  so `plan_ic_measurement` with a planned temperature above `Tc`.
+- The sign of `absnoise.levels.continuum_free_energy`.
+- `plan_psd_measurement` with a non-integer `n_avg`.
+
+Also new: `click_template` refuses a negative deposited energy, a
+non-positive `tauA` or `T0`, and accepts a zero deposit (it raised
+`ZeroDivisionError`); `avar_exponential` refuses non-finite inputs.
+No function was renamed or removed, and results that were correct
+before are unchanged (all eight earlier examples print exactly what
+they printed with 0.11.0).
+
 ## What changed in 0.11.0
 
 New:
@@ -598,7 +749,8 @@ The corrections, with before/after numbers, are listed under
 - `gap_bcs(T, Tc, Delta0)` -- the gap `Delta(T)`, from the gap equation
   of BCS theory (the standard Bardeen-Cooper-Schrieffer theory of
   superconductivity) solved numerically, not the common interpolation
-  formula.
+  formula. Since 0.12.0 it follows the square-root closing of the gap
+  right up to `Tc`.
 - `ShortJunction` -- the closed-form short-junction model: levels,
   current-phase relation, `Ic`, `dIdphi0`, occupation sums and
   `temperature_bound`.
@@ -634,7 +786,8 @@ The corrections, with before/after numbers, are listed under
   periodogram, and the exact per-sample flip probabilities.
 - `allan_variance`, `avar_exponential`, `avar_white` -- the Allan
   variance of data, and its closed forms for exponentially correlated
-  and white noise.
+  and white noise (`avar_exponential` is accurate for any averaging
+  time since 0.12.0).
 
 **Device budget and single photons**
 
@@ -656,12 +809,15 @@ The corrections, with before/after numbers, are listed under
 **From measured data**
 
 - `fit_ic_curve`, `IcFit`, `ic_model` -- the Ic(T) fit, its result
-  (with `to_recipe`), and the model curve.
+  (with `to_recipe`, and `propagate` for error bars on anything
+  computed from the fitted junction), and the model curve.
 - `fit_telegraph_psd`, `TelegraphPSDFit`, `telegraph_psd_model` -- the
   noise-spectrum fit, its result, and the model spectrum.
 - `fit_hmm`, `TelegraphHMM` -- the readout-trace decoder
   (`posterior`, `viterbi`, `forward_backward`, `rates`, `from_rates`,
   and `uncertainties`, `score`, `loglik` for error bars).
+- `markov_dwell_test`, `dwell_times` -- does a decoded trace follow the
+  single-rate telegraph model? And the stays in each state.
 - `load_ic_csv`, `save_ic_csv` (header `T_K,Ic_A` or
   `T_K,Ic_A,sigma_Ic_A`), `load_trace_csv`, `save_trace_csv` (header
   `t_s,y`), `validate_ic_data` -- the file formats and unit checks.
@@ -694,8 +850,8 @@ gives its inputs, units and conventions.
   needs at least 8 points, positive frequencies (drop the zero-frequency
   point), a positive PSD and, if given, `n_avg >= 1`.
 - `plan_psd_measurement` and `averages_for_tau` get a planned band the
-  fit would refuse (the same rules, applied in advance), `n_avg < 1`,
-  or a non-positive target; `psd_band_for_tau` gets a margin below 4.
+  fit would refuse (the same rules, applied in advance), `n_avg < 1`
+  or not finite, or a non-positive target; `psd_band_for_tau` gets a margin below 4.
 - `fit_ic_curve` gets fewer than 4 points, fewer than 5 points without
   measurement errors (the noise level must then be estimated from the
   residuals), non-finite values, non-positive temperatures or currents,
@@ -714,7 +870,8 @@ gives its inputs, units and conventions.
   temperatures and negative currents.
 - `allan_variance` gets fewer than 4 samples, non-finite samples, a
   non-positive `dt` or a window outside `1 <= m <= len(x)//2`; the
-  closed forms get a negative variance or PSD, or non-positive times.
+  closed forms get a negative variance or PSD, or non-positive times
+  (`avar_exponential` also refuses non-finite inputs).
 - `TelegraphHMM` gets flip probabilities outside (0, 1), a non-positive
   noise or not exactly two levels.
 - `steady_temperature` gets a negative power; `nep_spectrum` gets a
@@ -729,6 +886,18 @@ gives its inputs, units and conventions.
 - `telegraph_traces` and `flip_probabilities` get `f` outside [0, 1]
   or a non-positive `tauA` or `dt`. (Up to 0.10.x `telegraph_traces`
   instead refused coarse time steps, with a Python `assert`.)
+- `IcFit.propagate` finds that the result is too nonlinear over the
+  error bars (second-order change over one standard deviation above
+  `max_nonlinearity` times the error bar, default 0.1), that a
+  parameter would leave its range within one standard deviation
+  (`Ic0 > 0`, `Tc > 0`, `0 < tau <= 1`), or that `func` returns a
+  non-finite value.
+- `markov_dwell_test` gets fewer than `min_dwells` (default 30)
+  complete stays in a state, a mean stay below 2 samples (sampling too
+  coarse), fewer than 19 simulated traces, or a model that is not a
+  `TelegraphHMM`.
+- `click_template` gets a negative or non-finite deposited energy, or
+  a non-positive `tauA` or `T0`.
 - `fit_hmm` gets fewer than 4 samples, non-finite samples or a
   constant trace; `forward_backward` and `viterbi` get an empty trace; `rates` gets flip probabilities adding up to 1 or
   more (successive samples anti-correlated: no telegraph process does
@@ -737,7 +906,7 @@ gives its inputs, units and conventions.
 
 ## How the results are checked
 
-131 automated tests run on every push and pull request, on Python 3.9,
+160 automated tests run on every push and pull request, on Python 3.9,
 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.9 with the
 oldest NumPy (1.24.0) and SciPy (1.10.0) the package allows. The
 numerical checks compare the package with an exact formula, a second
@@ -758,6 +927,18 @@ check that refusals fire. The main checks:
 - BCS gap: equals `Delta0` at 0.01 `Tc` to 1e-10, is below 0.05
   `Delta0` at 0.99999 `Tc`, equals the tabulated 0.956887 at `Tc/2`
   within 2e-4, and falls monotonically.
+- BCS gap near `Tc` (0.12.0): between 0.99 and 0.9998 `Tc` it equals
+  direct solutions of the gap equation in integral form to 1e-9, and
+  closer to `Tc` direct solutions of its Matsubara-sum form; the two
+  forms agree to 1e-9 from 0.1 to 0.999 `Tc`. At 0.99999 and 0.999999
+  `Tc` it matches the Ginzburg-Landau limit
+  `u = (pi t / A) sqrt(8 ln(t1/t) / (7 zeta(3)))`, derived from the
+  sum, to 2e-5. It is continuous at 0.99 `Tc` (1e-6), and below it
+  returns the values of 0.11.0 (two checked to 1e-12).
+- The free energy of the continuum (0.12.0): `F_bound + F_cont` stays
+  continuous (within 2 % of the bound-level jump) where a bound level
+  leaves for the continuum, and `continuum_free_energy` agrees with the
+  `JunctionModel` code path to 5e-4.
 - Short junction: the continuum carries no phase dependence (below
   1e-14).
 
@@ -792,6 +973,10 @@ check that refusals fire. The main checks:
 **Allan variance**
 
 - Linear drift: the estimator gives `(c T)^2 / 2` to 1e-12.
+- The closed form matches the defining integral, rewritten without
+  cancellation and integrated adaptively, to 1e-9 from `T = 1e-8 tau`
+  to `3 tau`, and its Taylor series `2r/3 - r^2/2 + 7r^3/30 - r^4/12`
+  (`r = T/tau`) to 1e-12 at `r = 1e-3` (0.12.0).
 - The closed form matches numerical integration of the defining
   integrals to 1e-6, and both limits to 1e-3.
 - Telegraph Monte Carlo matches the closed form within 12 %, white
@@ -855,7 +1040,24 @@ check that refusals fire. The main checks:
 - Ic(T) model: the closed-form zero-temperature maximum equals a dense
   grid maximum within 1e-8 (transparencies 0.05, 0.3, 0.78, 0.99 and
   1); `ic_model`
-  equals `ShortJunction.Ic` within 1e-12 for all six recipes.
+  equals `ShortJunction.Ic` within 1e-12 for all six recipes; both are
+  exactly 0 at and above `Tc`, and a planned point above `Tc` leaves
+  the planned error bars unchanged (1e-12).
+- Error propagation (`IcFit.propagate`): exact for a linear function
+  of the parameters (1e-10, also the fit's own error bars and
+  covariance block); for `Tc^2` the closed form `2 Tc sigma(Tc)`
+  (1e-9) and the expected range of the nonlinearity measure; for the
+  Josephson inductance, the spread of 400 parameter sets drawn from
+  the covariance within 12 % (the standard error of that spread is
+  3.5 %); refusals for a nonlinear function, `tau` within one error
+  bar of 1, and non-finite results.
+- Dwell-time check: stays counted by hand on a short path; the
+  dispersion index of 200 000 geometric samples within 0.02 of 1; the
+  simulated reference paths have the closed-form occupation and flip
+  rate (1 % and 3 %); on 12 Markov traces (`telegraph_traces` plus
+  noise, each fitted with `fit_hmm`) no p-value is below 0.01 and their
+  mean lies between 0.3 and 0.75; a trace whose filled stays have two
+  time scales gives dispersion above 1.4 and p-value at most 0.01.
 - Ic(T) fit: noise-free data return `Ic0` and `Tc` within 1e-6 and
   `tau` within 1e-5; over 60 noisy fits the scatter is between 0.5
   and 1.5 times the reported error bars; a fitted recipe fed back into
@@ -905,7 +1107,8 @@ check that refusals fire. The main checks:
   cooldowns scatter in `Tc` within 20 % of the plan; a run below 0.3
   `Tc` is flagged and its `Tc` error is more than 10 times larger; the
   greedy design is never worse than 20 random choices.
-- Planned spectrum-fit error bars equal the fit's within 0.1 %; the
+- Planned spectrum-fit error bars equal the fit's within 0.1 %, also
+  for non-integer `n_avg` (1.5, 2.5, 7.3; 0.12.0); the
   `sqrt(psi'(n_avg))` scaling holds to 1e-9; `averages_for_tau` returns the
   smallest sufficient number; 300 simulated spectra scatter in `tau`
   within 20 % of the plan; a band from `psd_band_for_tau` is accepted
@@ -913,7 +1116,59 @@ check that refusals fire. The main checks:
 
 ## Corrections in earlier versions
 
-**0.11.0 (this release) corrects five results of 0.10.1.** Each
+**0.12.0 (this release) corrects five results of 0.11.0.** Each was
+found by a test that fails on 0.11.0 and passes now
+(`tests/test_v012.py`). None of them changes the output of an example
+in this README.
+
+- **The gap just below `Tc`.** `gap_bcs` read the gap from a cubic
+  spline in `T/Tc` that ended at 0.9995 `Tc` and returned 0 above it.
+  The gap closes as a square root, which such a spline cannot follow.
+  Between 0.9995 `Tc` and `Tc` the result was 0 instead of 0.039 to
+  0.006 `Delta0` (at 0.9997 `Tc`: 0 instead of 0.0307 `Delta0`), and
+  `SensorBudget` refused those temperatures as "at or above Tc".
+  Below, the spline was off from the solution of its own gap equation
+  by +0.13 % at 0.998 `Tc` (0.077956 instead of 0.077854 `Delta0`)
+  and by -0.67 % at 0.999 `Tc` (0.054884 instead of 0.055252; see
+  [Limits](#limits) for how this equation differs from exact BCS
+  theory this close to `Tc`). From 0.99 `Tc` on, the gap now comes from a table of
+  `u / sqrt(1 - t/t1)`, built from the Matsubara-sum form of the same
+  gap equation. It agrees with direct solutions to better than 1e-9.
+  Below 0.99 `Tc` nothing changed.
+- **Allan variance for short averaging times.** The four terms of the
+  closed form of `avar_exponential` cancel to order `(T/tau)^3`, so
+  for `T` much shorter than `tau` the result was mostly rounding
+  error. With `var = tau = 1`: at `T = 1e-4` 6.66578e-5 instead of
+  6.66617e-5, at `T = 1e-5` 7.77e-6 instead of 6.67e-6 (17 % high),
+  and at `T = 1e-6` -1.1e-4 (negative) instead of 6.67e-7. Below
+  `T = tau/2` the bracket is now summed as its Taylor series; the
+  tests compare it with the defining integral, rewritten so that it
+  does not cancel, to 1e-9.
+- **Critical current above `Tc`.** `ic_model` and `ShortJunction.Ic`
+  returned NaN at and above `Tc` (0/0 with a closed gap); the
+  supercurrent there is 0. Through NaN sensitivities,
+  `plan_ic_measurement` then called any plan with one temperature
+  above `Tc` "not identifiable" (identifiable False, no error bars).
+  Now such a point adds no information, and the plan equals the plan
+  without it.
+- **Sign of the continuum free energy.** The function
+  `absnoise.levels.continuum_free_energy` returned the opposite sign
+  of the continuum free energy that `JunctionModel` (and so the
+  current, `continuum_share` and `occupation_heat_capacities`)
+  uses. Its docstring said the sign was fixed by continuity of the
+  total free energy where a bound level leaves for the continuum. With
+  the old sign the total jumped there by twice the free energy of the
+  departing level (2.013 `Delta` instead of 0.007 `Delta` across
+  0.06 rad, in the test case). `JunctionModel` was right and is
+  unchanged.
+- **Planned spectrum error bars for a non-integer `n_avg`.**
+  `plan_psd_measurement` truncated `n_avg` to an integer, although
+  the fit accepts an effective number of averages. For the band of
+  Example 4 with `n_avg = 1.5`, it planned `sigma(tau)` = 159.0 us
+  (the value for `n_avg = 1`) while the fit reports 119.9 us. It now
+  uses `n_avg` as given.
+
+**0.11.0 corrects five results of 0.10.1.** Each
 change below alters numbers that earlier versions printed.
 
 - **Energy resolution.** `SensorBudget.energy_resolution` integrated
@@ -1044,6 +1299,25 @@ No earlier release records a correction. The full history is in
   noise near the highest frequency, which the fit does not model.
 - `SensorBudget.energy_resolution` assumes an ideal matched filter over
   all frequencies; a real readout with a finite bandwidth does worse.
+- `gap_bcs` solves the gap equation with `Delta0 / (kB Tc) = 1.7639`,
+  the BCS value `pi e^-gamma = 1.76388` rounded. Its solution would
+  close at 1.000013 `Tc` instead of at `Tc`. `gap_bcs` returns 0 from
+  `Tc` on, so the gap steps from 0.0063 `Delta0` to 0 there. Close to
+  `Tc` this small shift matters: the gap lies above the curve of the
+  exact constant by 0.65 % at 0.999 `Tc`, 1.3 % at 0.9995 `Tc` and
+  6 % at 0.9999 `Tc` (and by less than 3e-6 below 0.5 `Tc`). The
+  constant is kept so that every result below 0.99 `Tc` stays as in
+  earlier releases.
+- `IcFit.propagate` is first order. It carries only the uncertainty of
+  `Ic0`, `Tc` and `tau`; your geometry, the phonon parameters and the
+  readout settings enter as exact numbers.
+- `markov_dwell_test` looks at one property of the stays, their spread
+  (the dispersion index). It detects several time scales and dead
+  times, but not, for example, a correlation between successive
+  stays. The simulated reference uses the fitted model as it is (the
+  model is not refitted to each simulated trace), and the first and
+  last stay of a trace are left out. With `n_boot` simulated traces
+  the smallest p-value it can report is `4 / (n_boot + 1)`.
 - The greedy temperature design is a good heuristic, not a proof of
   the best subset.
 
@@ -1067,7 +1341,11 @@ compared with J. C. Mather, Appl. Opt. 21, 1125 (1982). The Allan
 variance follows D. W. Allan, Proc. IEEE 54, 221 (1966) and W. J.
 Riley, Handbook of Frequency Stability Analysis, NIST Special
 Publication 1065 (2008). The temperature design follows F. Pukelsheim,
-Optimal Design of Experiments, SIAM (2006). A replacement recipe number
+Optimal Design of Experiments, SIAM (2006). Near `Tc` the gap equation
+is solved in its Matsubara-sum form, which follows from the integral
+form through the partial-fraction expansion
+`tanh(x/2) / x = sum_n 4 / (x^2 + (2n+1)^2 pi^2)`; the tests check the
+two forms against each other. A replacement recipe number
 must arrive with a new source. No phonon-stack parameters are shipped
 at all -- they are measurements of a real device, and calls without
 them raise.
