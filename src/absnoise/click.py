@@ -70,8 +70,10 @@ def matched_recipe(T0, W, L, tau=0.3, Vbg=30.0, Ic20=1.08e-6, Rn=43.3,
                   Ic20, Rn)
 
 
-def click_template(budget, E_gamma, tauA, T0, scenario="C",
-                   dt=1e-10, t_end=2e-7, dt2=None, t_end2=None):
+def click_template(budget, E_gamma: float, tauA: float, T0: float,
+                   scenario: str = "C", dt: float = 1e-10,
+                   t_end: float = 2e-7, dt2: float | None = None,
+                   t_end2: float | None = None) -> dict:
     """Noiseless occupation response m(t) to a photon deposit (J).
 
     budget : a SensorBudget built on the operating recipe.
@@ -82,6 +84,16 @@ def click_template(budget, E_gamma, tauA, T0, scenario="C",
     if scenario not in ("C", "T"):
         raise ValueError("scenario must be 'C' (cold exchange time) or "
                          "'T' (thermally activated)")
+    # input checks (new in 0.12.0): a negative deposit gave a start
+    # below T0 that never relaxed, and E_gamma = 0 a ZeroDivisionError
+    E_gamma, tauA, T0 = float(E_gamma), float(tauA), float(T0)
+    if not (np.isfinite(E_gamma) and E_gamma >= 0.0):
+        raise ValueError("deposited energy E_gamma must be finite and "
+                         ">= 0 (J)")
+    if not (np.isfinite(tauA) and tauA > 0.0):
+        raise ValueError("tauA must be finite and positive (s)")
+    if not (np.isfinite(T0) and T0 > 0.0):
+        raise ValueError("T0 must be finite and positive (K)")
     if dt2 is None:
         dt2 = min(2e-8, tauA / 6.0)
     if t_end2 is None:
@@ -93,7 +105,8 @@ def click_template(budget, E_gamma, tauA, T0, scenario="C",
     D = sj.Delta(T0)
     m0 = float(np.tanh(D / (2 * KB * T0)))
     Tpk = float(np.sqrt(T0 ** 2 + 2 * E_gamma / gam))
-    residual = abs(0.5 * gam * (Tpk ** 2 - T0 ** 2) - E_gamma) / E_gamma
+    residual = (abs(0.5 * gam * (Tpk ** 2 - T0 ** 2) - E_gamma) / E_gamma
+                if E_gamma > 0.0 else 0.0)
 
     def tau_of_T(Te):
         if scenario == "C":

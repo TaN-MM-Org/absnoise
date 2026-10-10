@@ -44,6 +44,12 @@ Changed in 0.11.0:
   faster (forward-backward) and 17 times faster (Viterbi) than
   0.10.x, with the same results to rounding (checked in the tests
   against the 0.10.x matrix formulation).
+
+New in 0.12.0: `dwell_times` (the complete stays in each state of a
+decoded path) and `markov_dwell_test`, which checks whether those
+stays follow the geometric law of the single-rate Markov model this
+module assumes, against a parametric bootstrap that simulates and
+decodes the fitted model.
 """
 from __future__ import annotations
 
@@ -346,6 +352,161 @@ def _two_cluster_split(y):
     within = (float(np.sum((ys[:kk] - m_lo) ** 2))
               + float(np.sum((ys[kk:] - m_hi) ** 2)))
     return m_lo, m_hi, float(np.sqrt(within / n)), (n - kk) / n
+
+
+def dwell_times(path, dt: float = 1.0) -> dict:
+    """Complete dwell times of a two-state path (new in 0.12.0).
+
+    path : sequence of 0/1 states, for example `TelegraphHMM.viterbi`.
+    dt : sample interval (s); the default 1 gives dwells in samples.
+
+    Returns {0: array, 1: array}: the durations of every stay in state
+    0 and in state 1, in time order, as (number of samples) * dt. The
+    first and the last stay are left out, because the record cuts them
+    (their true length is unknown).
+    """
+    s = np.asarray(path).ravel()
+    if s.size < 1:
+        raise ValueError("the path is empty")
+    if not np.all((s == 0) | (s == 1)):
+        raise ValueError("the path must contain only the states 0 and 1")
+    dt = float(dt)
+    if not (np.isfinite(dt) and dt > 0.0):
+        raise ValueError("dt must be finite and positive")
+    s = s.astype(np.int8)
+    change = np.flatnonzero(s[1:] != s[:-1]) + 1
+    starts = np.concatenate([[0], change])
+    lengths = np.diff(np.concatenate([starts, [s.size]]))
+    states = s[starts]
+    lengths, states = lengths[1:-1], states[1:-1]
+    return {0: lengths[states == 0] * dt, 1: lengths[states == 1] * dt}
+
+
+def _dispersion(k):
+    """var(k) / (mean(k) (mean(k) - 1)) of dwell lengths k in samples.
+    A geometric law P(k) = (1 - p)^(k-1) p has mean 1/p and variance
+    (1 - p)/p^2 = mean (mean - 1), so its population value is 1."""
+    m = float(np.mean(k))
+    return float(np.var(k, ddof=1)) / (m * (m - 1.0))
+
+
+def _simulate_path(p_up, p_dn, n, rng):
+    """A path of n samples of the two-state Markov chain, started from
+    its stationary law, built from geometric stays (vectorized)."""
+    s = p_up + p_dn
+    state = int(rng.random() < p_up / s)
+    mean_pair = 1.0 / p_up + 1.0 / p_dn
+    out = np.empty(0, dtype=np.int8)
+    while out.size < n:
+        m = int(2.0 * n / mean_pair) + 8
+        st0 = rng.geometric(p_up, m)          # stays in state 0
+        st1 = rng.geometric(p_dn, m)          # stays in state 1
+        if state == 0:
+            lens = np.column_stack([st0, st1]).ravel()
+            vals = np.tile(np.array([0, 1], dtype=np.int8), m)
+        else:
+            lens = np.column_stack([st1, st0]).ravel()
+            vals = np.tile(np.array([1, 0], dtype=np.int8), m)
+        out = np.concatenate([out, np.repeat(vals, lens)])
+        state = int(out[-1]) ^ 1
+    return out[:n]
+
+
+def markov_dwell_test(y, model: TelegraphHMM, n_boot: int = 200,
+                      seed: int = 0, min_dwells: int = 30) -> dict:
+    """Do the dwells in a decoded trace follow the single-rate
+    (Markov) telegraph model? (new in 0.12.0)
+
+    The decoder assumes a two-state Markov process: every stay in a
+    state ends with the same probability per sample, so the stays are
+    geometric (exponential in continuous time), with one correlation
+    time. Several trap states, slow drifts of the rates or a dead time
+    break this, and then f and tauA from `fit_hmm` describe no single
+    process. This test asks whether the data show such a departure.
+
+    y : the readout trace; model : the `TelegraphHMM` fitted to it (by
+    `fit_hmm`). The trace is decoded with `model.viterbi`, and for the
+    complete stays in each state (see `dwell_times`) the dispersion
+    index
+
+        D = var(k) / (mean(k) (mean(k) - 1))
+
+    is computed from the stay lengths k (in samples). A geometric law
+    has variance mean (mean - 1), so D is near 1 for a Markov process;
+    D > 1 means too many very short and very long stays (several time
+    scales), D < 1 too regular stays (for example a dead time).
+
+    The reference distribution of D comes from a parametric bootstrap
+    of the whole chain: n_boot traces of the same length are simulated
+    from `model` (Markov path plus Gaussian noise) and decoded with
+    the same Viterbi step. Decoding errors (missed short stays at low
+    signal-to-noise) therefore enter the data and the reference in the
+    same way. The p-value of each state is two-sided,
+    2 min(P(D* >= D), P(D* <= D)), with the usual +1 correction of a
+    finite bootstrap; `p_value` combines the two states (twice the
+    smaller one, Bonferroni). A small p-value (say below 0.01) means
+    the data are not consistent with the single-rate model; a large one
+    means no departure was detected, not that the model is proven.
+
+    Returns dict(p_value, p_state, dispersion, n_dwells, mean_dwell),
+    the last three keyed by state (0, 1); mean_dwell is in samples.
+    Refuses traces with fewer than `min_dwells` complete stays in a
+    state (too few to judge a distribution) or a mean stay below 2
+    samples (sampling too coarse to resolve the stays).
+    """
+    if not isinstance(model, TelegraphHMM):
+        raise TypeError("model must be a TelegraphHMM (from fit_hmm)")
+    y = np.asarray(y, dtype=float).ravel()
+    if y.size < 4 or not np.all(np.isfinite(y)):
+        raise ValueError("y must hold at least 4 finite samples")
+    n_boot, min_dwells = int(n_boot), int(min_dwells)
+    if n_boot < 19:
+        raise ValueError("n_boot must be at least 19 (a p-value "
+                         "resolution of 0.1 for the two-sided test)")
+    if min_dwells < 10:
+        raise ValueError("min_dwells must be at least 10")
+
+    def stats(path):
+        d = dwell_times(path)
+        return d, {s: (_dispersion(d[s]) if d[s].size >= 2
+                       and d[s].mean() > 1.0 else np.nan)
+                   for s in (0, 1)}
+
+    dw, disp = stats(model.viterbi(y))
+    for s in (0, 1):
+        if dw[s].size < min_dwells:
+            raise ValueError(
+                f"only {dw[s].size} complete stays in state {s} (need "
+                f"{min_dwells}): too few to judge their distribution; "
+                "record a longer trace")
+        if dw[s].mean() < 2.0:
+            raise ValueError(
+                f"the mean stay in state {s} is {dw[s].mean():.2f} "
+                "samples: the sampling is too coarse to resolve the "
+                "stays; sample faster than the occupation flips")
+    rng = np.random.default_rng(seed)
+    boot = {0: [], 1: []}
+    for _ in range(n_boot):
+        path = _simulate_path(model.p_up, model.p_dn, y.size, rng)
+        yb = model.means[path] + model.sigma * rng.standard_normal(y.size)
+        _, db = stats(model.viterbi(yb))
+        for s in (0, 1):
+            boot[s].append(db[s])
+    p_state = {}
+    for s in (0, 1):
+        b = np.asarray(boot[s])
+        b = b[np.isfinite(b)]
+        if b.size < n_boot // 2:
+            raise ValueError("the simulated traces of this model rarely "
+                             "contain enough stays; record a longer "
+                             "trace")
+        hi = (1.0 + np.sum(b >= disp[s])) / (b.size + 1.0)
+        lo = (1.0 + np.sum(b <= disp[s])) / (b.size + 1.0)
+        p_state[s] = float(min(1.0, 2.0 * min(hi, lo)))
+    return dict(p_value=float(min(1.0, 2.0 * min(p_state.values()))),
+                p_state=p_state, dispersion=disp,
+                n_dwells={s: int(dw[s].size) for s in (0, 1)},
+                mean_dwell={s: float(dw[s].mean()) for s in (0, 1)})
 
 
 def fit_hmm(y, n_iter: int = 60, init: TelegraphHMM | None = None,

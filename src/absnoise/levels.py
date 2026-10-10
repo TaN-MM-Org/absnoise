@@ -91,7 +91,9 @@ def continuum_delta(phi, tau, c, Delta, Efac):
     return -np.angle(D)
 
 
-def continuum_free_energy(phi, tau, c, Delta, T, n_E=800, Emax_fac=60.0):
+def continuum_free_energy(phi: float, tau: float, c: float, Delta: float,
+                          T: float, n_E: int = 800,
+                          Emax_fac: float = 60.0) -> float:
     """Continuum (E > Delta) contribution to the phase-dependent free
     energy of one channel (J), from the scattering-phase density of
     states. Above the gap the secular function continues to
@@ -100,11 +102,19 @@ def continuum_free_energy(phi, tau, c, Delta, T, n_E=800, Emax_fac=60.0):
         gamma = arccosh(E/Delta),  R = 1 - tau + tau cos(phi),
 
     and D factorizes as (1 - w e^{i sigma})(1 - w e^{-i sigma}) with
-    cos(sigma) = R, so |arg D| < pi (no winding). The free energy is
-        F_cont = (1/pi) int_Delta^inf tanh(E/2kBT) arg D(E) dE ,
-    with the sign fixed by continuity of F_bound + F_cont across the
-    phase where a bound state exits into the continuum (this package's
-    test suite does not assert that continuity).
+    cos(sigma) = R, so |arg D| < pi (no winding). With the scattering
+    phase delta(E) = -arg D(E) (as in `continuum_delta`), the free
+    energy is
+        F_cont = (2 kB T / pi) ln[2 cosh(Delta / 2 kB T)] delta(Delta+)
+                 + (1/pi) int_Delta^inf tanh(E/2kBT) delta(E) dE ,
+    the same expression `JunctionModel.free_energy_multi` and
+    `free_energy_components` evaluate. The sign is fixed by continuity
+    of F_bound + F_cont across the phase where a bound state exits into
+    the continuum, which the tests check (fixed in 0.12.0: up to 0.11.0
+    this function returned the opposite sign, so F_bound + F_cont
+    jumped there by twice the free energy of the departing level).
+    The energy grid starts 1e-9 Delta above the gap, so within a few
+    1e-3 rad of a bound-state exit the threshold is not fully resolved.
     """
     E = Delta * (1.0 + np.logspace(-9, np.log10(Emax_fac), n_E))
     gam = np.arccosh(E / Delta)
@@ -112,7 +122,7 @@ def continuum_free_energy(phi, tau, c, Delta, T, n_E=800, Emax_fac=60.0):
     w = np.exp(-2.0 * gam) * np.exp(1j * eta)
     R = np.clip(1.0 - tau + tau * np.cos(phi), -1.0, 1.0)
     D = 1.0 - 2.0 * w * R + w * w
-    delta_ph = np.angle(D)
+    delta_ph = -np.angle(D)
     x = Delta / (2.0 * KB * T)
     log2cosh_D = x + np.log1p(np.exp(-2.0 * x))
     boundary = (2.0 * KB * T / np.pi) * log2cosh_D * delta_ph[0]
@@ -265,16 +275,81 @@ def _build_bcs_table():
 
 _BCS_SPLINE = None
 
+# Near Tc (new in 0.12.0). The gap vanishes as a square root, which a
+# cubic spline in t cannot follow: up to 0.11.0 the spline above was
+# off by 0.13 % at t = 0.998 and 0.67 % at t = 0.999, and gap_bcs
+# returned 0 for 0.9995 <= t < 1. Above _T_NEAR the gap is now taken
+# from a second table of the smooth function h(t) = u(t) / sqrt(1 - t/t1),
+# where t1 is the reduced temperature at which this gap equation closes.
+_T_NEAR = 0.99
+# With Delta0 = A kB Tc the weak-coupling gap equation closes at
+# kB T1 = Delta0 e^gamma / pi (gamma: Euler's constant), i.e. at
+# t1 = A e^gamma / pi. For the exact BCS ratio A = pi e^-gamma this is
+# 1; for the rounded A = 1.7639 used here it is 1.0000130.
+_T1 = _BCS_A * np.exp(np.euler_gamma) / np.pi
 
-def gap_bcs(T, Tc, Delta0):
+
+def _matsubara_lhs(y, n_terms=4000):
+    """2 sum_{n>=0} [1/(2n+1) - 1/sqrt((2n+1)^2 + y^2)], with the tail
+    beyond n_terms added as its integral (midpoint rule; error below
+    1e-15 for the y < 1 used here)."""
+    w = 2.0 * np.arange(n_terms) + 1.0
+    s = float(np.sum(1.0 / w - 1.0 / np.sqrt(w * w + y * y)))
+    X = 2.0 * n_terms
+    tail = 0.5 * (np.log(0.5 * y) - np.log(X) + np.arcsinh(X / y))
+    return 2.0 * (s + tail)
+
+
+def _solve_bcs_u_matsubara(t):
+    """u = Delta/Delta0 at reduced temperature t from the Matsubara-sum
+    form of the same weak-coupling gap equation,
+
+        ln(t1 / t) = 2 sum_{n>=0} [1/(2n+1) - 1/sqrt((2n+1)^2 + y^2)],
+        y = Delta / (pi kB T) = u A / (pi t),
+
+    which follows from the integral form used by `_solve_bcs_u` through
+    the partial-fraction expansion
+    tanh(x/2) / x = sum_{n>=0} 4 / (x^2 + (2n+1)^2 pi^2).
+    It stays well conditioned as u -> 0, where the integral form loses
+    accuracy. The tests check that the two forms agree."""
+    rhs = np.log(_T1 / t)
+    return brentq(lambda u: _matsubara_lhs(u * _BCS_A / (np.pi * t)) - rhs,
+                  1e-12, 1.5, xtol=1e-16, rtol=1e-15)
+
+
+def _build_near_tc_table():
+    """Cubic spline of h(t) = u(t) / sqrt(1 - t/t1) on [0.985, 1]."""
+    from scipy.interpolate import CubicSpline
+    ts = np.linspace(0.985, 1.0, 31)
+    hs = np.array([_solve_bcs_u_matsubara(t) / np.sqrt(1.0 - t / _T1)
+                   for t in ts])
+    return CubicSpline(ts, hs)
+
+
+_NEAR_TC_SPLINE = None
+
+
+def gap_bcs(T, Tc: float, Delta0: float):
     """Delta(T) from the numerically solved weak-coupling BCS gap
     equation (universal u(t), t = T/Tc), with the exact low-T asymptote
     u = 1 - sqrt(2 pi t / A) exp(-A/t) below t = 0.08. The universal
     table is computed once per process from the gap equation itself (no
     data file needed). Validated against both asymptotes in the
     testbench (the widely used tanh interpolation misrepresents
-    dDelta/dT at low T by an order of magnitude)."""
-    global _BCS_SPLINE
+    dDelta/dT at low T by an order of magnitude).
+
+    From t = 0.99 to Tc (changed in 0.12.0) the gap comes from a table
+    of u / sqrt(1 - t/t1) built from the Matsubara-sum form of the same
+    equation, which follows the square-root closing exactly (agreement
+    with direct solutions better than 1e-9 relative, tested). Up to
+    0.11.0 the result was 0 for 0.9995 <= t < 1 and up to 0.7 % off
+    between t = 0.995 and 0.9995. The result is 0 for t >= 1. The
+    equation uses A = Delta0/(kB Tc) = 1.7639 (the BCS value
+    pi e^-gamma = 1.76388, rounded), so its solution would close at
+    t1 = 1.000013 rather than at t = 1; the step from u(1) = 0.0063 to
+    0 at Tc is that rounding, kept so that results below 0.99 Tc stay
+    identical to earlier releases."""
+    global _BCS_SPLINE, _NEAR_TC_SPLINE
     t = np.asarray(T, dtype=float) / Tc
     scalar = (t.ndim == 0)
     t = np.atleast_1d(t)
@@ -282,11 +357,17 @@ def gap_bcs(T, Tc, Delta0):
     lo = t < 0.08
     u[lo] = 1.0 - np.sqrt(2 * np.pi * t[lo] / _BCS_A) * \
         np.exp(-_BCS_A / np.maximum(t[lo], 1e-6))
-    mid = (~lo) & (t < 0.9995)
+    mid = (~lo) & (t < _T_NEAR)
     if np.any(mid):
         if _BCS_SPLINE is None:
             _BCS_SPLINE = _build_bcs_table()
         u[mid] = np.clip(_BCS_SPLINE(t[mid]), 0.0, 1.0)
+    near = (t >= _T_NEAR) & (t < 1.0)
+    if np.any(near):
+        if _NEAR_TC_SPLINE is None:
+            _NEAR_TC_SPLINE = _build_near_tc_table()
+        tn = t[near]
+        u[near] = _NEAR_TC_SPLINE(tn) * np.sqrt(1.0 - tn / _T1)
     out = Delta0 * u
     return float(out[0]) if scalar else out
 

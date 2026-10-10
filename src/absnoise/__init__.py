@@ -34,7 +34,7 @@ from .click import (click_monte_carlo, click_template, matched_Tc,
                     matched_recipe)
 from .twotemp import total_energy, two_temperature_click
 
-from .decode import TelegraphHMM, fit_hmm
+from .decode import TelegraphHMM, dwell_times, fit_hmm, markov_dwell_test
 from .lab import (averages_for_tau, design_ic_temperatures,
                   plan_ic_measurement, plan_psd_measurement,
                   psd_band_for_tau)
@@ -43,7 +43,7 @@ from .psdfit import TelegraphPSDFit, fit_telegraph_psd, telegraph_psd_model
 from .data import (load_ic_csv, load_trace_csv, save_ic_csv,
                    save_trace_csv, validate_ic_data)
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
@@ -55,7 +55,7 @@ __all__ = [
     "flip_probabilities",
     "allan_variance", "avar_exponential", "avar_white",
     "SensorBudget", "matched_filter_sigma",
-    "TelegraphHMM", "fit_hmm",
+    "TelegraphHMM", "fit_hmm", "dwell_times", "markov_dwell_test",
     "IcFit", "fit_ic_curve", "ic_model",
     "TelegraphPSDFit", "fit_telegraph_psd", "telegraph_psd_model",
     "load_ic_csv", "save_ic_csv", "load_trace_csv", "save_trace_csv",

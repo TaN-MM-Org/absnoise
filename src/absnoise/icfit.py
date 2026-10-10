@@ -46,6 +46,11 @@ seeded Monte-Carlo scatter is compatible with the reported sigmas;
 degenerate inputs raise; and a fitted result drops back into the
 package as a `Recipe` whose calibrated `ShortJunction` reproduces the
 input curve.
+
+New in 0.12.0: `IcFit.propagate` carries the fit covariance into any
+number computed from the fitted junction (sigma points along the
+principal axes of the covariance, exact for linear functions; refused
+when the function is too nonlinear over the error bars).
 """
 from __future__ import annotations
 
@@ -67,8 +72,13 @@ def _shape_max(T, Tc, tau, n_phi=601):
     phi = np.linspace(1e-6, np.pi - 1e-6, n_phi)
     s2 = np.sin(phi / 2.0) ** 2
     E = D[:, None] * np.sqrt(1.0 - tau * s2[None, :])   # (nT, nphi)
-    I = (D[:, None] ** 2 * tau * np.sin(phi)[None, :] / (4.0 * E)) \
-        * np.tanh(E / (2.0 * KB * T[:, None]))
+    # at and above Tc the gap is 0 and so is the supercurrent; the
+    # expression below is 0/0 there (NaN up to 0.11.0)
+    gap = D > 0.0
+    I = np.zeros_like(E)
+    I[gap] = (D[gap, None] ** 2 * tau * np.sin(phi)[None, :]
+              / (4.0 * E[gap])) \
+        * np.tanh(E[gap] / (2.0 * KB * T[gap, None]))
     return I.max(axis=1)
 
 
@@ -86,8 +96,12 @@ def _shape_zero(Tc, tau):
         / np.sqrt(1.0 - tau * u)
 
 
-def ic_model(T, Ic0, Tc, tau, n_phi=601):
-    """Short-junction Ic(T) with unit-normalized zero-T value Ic0."""
+def ic_model(T, Ic0: float, Tc: float, tau: float, n_phi: int = 601):
+    """Short-junction Ic(T) with unit-normalized zero-T value Ic0.
+
+    T in K (scalar or array), Ic0 in A, Tc in K, 0 < tau <= 1. Returns
+    Ic in A; exactly 0 at and above Tc, where the gap has closed (NaN
+    up to 0.11.0)."""
     out = Ic0 * _shape_max(T, Tc, tau, n_phi) / _shape_zero(Tc, tau)
     return float(out[0]) if np.ndim(T) == 0 else out
 
@@ -130,6 +144,103 @@ class IcFit:
         ic20 = float(ic_model(0.020, self.Ic0, self.Tc, self.tau))
         return Recipe(name=name, label=label, Tc=self.Tc, xi=xi, L=L,
                       W=W, Vbg=Vbg, tau=self.tau, Ic20=ic20, Rn=Rn)
+
+    def propagate(self, func, xi, L, W, Vbg, Rn, name="fit", label="fit",
+                  max_nonlinearity=0.1) -> dict:
+        """Error bar of any number computed from the fitted junction
+        (new in 0.12.0).
+
+        func : callable that takes a `Recipe` and returns a number or
+            an array of numbers, for example
+            ``lambda r: SensorBudget(r).LJ(0.2)``.
+        xi, L, W, Vbg, Rn, name, label : passed to `to_recipe` (your
+            measured geometry; it is held fixed, only Ic0, Tc and tau
+            carry the fit's uncertainty).
+        max_nonlinearity : refusal threshold, see below.
+
+        The fit's covariance is propagated with sigma points: along
+        each principal axis k of `cov` (eigenvector v_k, eigenvalue
+        l_k) the parameters are moved by d_k = +-sqrt(l_k) v_k, and
+
+            g_k = (f(p + d_k) - f(p - d_k)) / 2,   cov_f = sum_k g_k g_k^T.
+
+        For a function that is linear in (Ic0, Tc, tau) this equals the
+        linearized result J cov J^T exactly; it needs no step size.
+        The curvature term c_k = (f(p + d_k) + f(p - d_k) - 2 f(p)) / 2
+        is the second-order change over one standard deviation. If
+        max_k |c_k| exceeds max_nonlinearity times the propagated error
+        bar, a first-order error bar does not describe the spread, and
+        the call is refused (sample the parameters from `cov` instead).
+        It is also refused when a parameter would leave its range
+        within one standard deviation (Ic0 > 0, Tc > 0, 0 < tau <= 1).
+
+        Returns dict(value, sigma, cov, nonlinearity): func at the
+        fit, its one-standard-deviation error (same shape as value),
+        the covariance of the outputs, and max_k |c_k| / sigma.
+        """
+        if not callable(func):
+            raise TypeError("func must be callable: func(recipe) -> value")
+        thr = float(max_nonlinearity)
+        if not (np.isfinite(thr) and thr > 0.0):
+            raise ValueError("max_nonlinearity must be finite and positive")
+        cov = np.asarray(self.cov, dtype=float)
+        if cov.shape != (3, 3) or not np.all(np.isfinite(cov)):
+            raise ValueError("the fit covariance must be a finite 3 x 3 "
+                             "matrix")
+        lam, vec = np.linalg.eigh(0.5 * (cov + cov.T))
+        if np.any(lam < 0.0):
+            raise ValueError("the fit covariance is not positive "
+                             "semi-definite")
+        p0 = np.array([self.Ic0, self.Tc, self.tau], dtype=float)
+        fields = dict(name=name, label=label, xi=xi, L=L, W=W, Vbg=Vbg,
+                      Rn=Rn)
+
+        def evaluate(p):
+            if not (p[0] > 0.0 and p[1] > 0.0 and 0.0 < p[2] <= 1.0):
+                raise ValueError(
+                    "within one standard deviation the parameters leave "
+                    f"their range (Ic0 = {p[0]:.4g}, Tc = {p[1]:.4g}, "
+                    f"tau = {p[2]:.4g}; need Ic0 > 0, Tc > 0, "
+                    "0 < tau <= 1): the error bars are too large for "
+                    "first-order propagation")
+            fit = dataclasses.replace(self, Ic0=float(p[0]),
+                                      Tc=float(p[1]), tau=float(p[2]))
+            val = np.asarray(func(fit.to_recipe(**fields)), dtype=float)
+            if not np.all(np.isfinite(val)):
+                raise ValueError(
+                    "func returned a non-finite value at parameters "
+                    f"(Ic0 = {p[0]:.4g}, Tc = {p[1]:.4g}, tau = "
+                    f"{p[2]:.4g})")
+            return val
+
+        f0 = evaluate(p0)
+        g, c = [], []
+        for k in range(3):
+            d = np.sqrt(lam[k]) * vec[:, k]
+            fp, fm = evaluate(p0 + d), evaluate(p0 - d)
+            g.append(0.5 * (fp - fm))
+            c.append(0.5 * (fp + fm - 2.0 * f0))
+        g = np.array(g).reshape(3, -1)
+        c = np.array(c).reshape(3, -1)
+        cov_f = g.T @ g
+        sig = np.sqrt(np.diag(cov_f))
+        curv = np.max(np.abs(c), axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(curv == 0.0, 0.0, curv / sig)
+        nonlin = float(np.max(ratio))
+        if nonlin > thr:
+            raise ValueError(
+                f"func is too nonlinear over the fit's error bars: the "
+                f"second-order change over one standard deviation is "
+                f"{nonlin:.3g} times the first-order error bar (limit "
+                f"{thr:g}). A first-order error bar would mislead; "
+                "sample (Ic0, Tc, tau) from `cov` and look at the spread "
+                "of func instead")
+        shape = f0.shape
+        return dict(value=float(f0) if f0.ndim == 0 else f0,
+                    sigma=float(sig[0]) if f0.ndim == 0
+                    else sig.reshape(shape),
+                    cov=cov_f, nonlinearity=nonlin)
 
 
 def fit_ic_curve(T, Ic, sigma_Ic=None, p0=None, n_phi=601) -> IcFit:

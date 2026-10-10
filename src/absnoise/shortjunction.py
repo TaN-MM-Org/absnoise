@@ -59,7 +59,11 @@ class ShortJunction:
         return -self.Delta(T) * self.tau / 4.0
 
     # ---- mean observables ------------------------------------------------
-    def current_phase(self, T):
+    def current_phase(self, T: float) -> np.ndarray:
+        """I(phi) (A) on the phase grid `phis`; zero at and above Tc,
+        where the gap has closed (NaN up to 0.11.0)."""
+        if not self.Delta(T) > 0.0:
+            return np.zeros_like(self.phis)
         E = self.E(self.phis, T)
         occ = np.tanh(E / (2.0 * KB * T))
         I1 = (2.0 * E_CHARGE / HBAR) * (-self.dEdphi(self.phis, T)) * occ

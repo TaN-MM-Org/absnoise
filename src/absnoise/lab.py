@@ -230,14 +230,15 @@ def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor):
     return jac
 
 
-def plan_psd_measurement(f_hz, n_avg, S0, tau_s, floor=0.0,
-                         fit_floor=True):
+def plan_psd_measurement(f_hz, n_avg: float, S0: float, tau_s: float,
+                         floor: float = 0.0, fit_floor: bool = True) -> dict:
     """Predicted PSD-fit error bars for a planned averaging depth.
 
     f_hz : the frequency bins you will record (must satisfy the same
         knee-visibility rules `fit_telegraph_psd` enforces -- checked
         here in advance, with the same explanations).
-    n_avg : number of independent periodogram averages per bin.
+    n_avg : number of independent periodogram averages per bin (>= 1;
+        an effective, non-integer number is accepted, as in the fit).
     S0, tau_s, floor : your expected spectrum (plateau, correlation
         time, white floor -- the working point).
 
@@ -251,9 +252,13 @@ def plan_psd_measurement(f_hz, n_avg, S0, tau_s, floor=0.0,
     larger at n_avg = 1).
     """
     _check_psd_point(f_hz, S0, tau_s, floor)
-    n_avg = int(n_avg)
-    if n_avg < 1:
-        raise ValueError("n_avg must be >= 1")
+    # an effective, non-integer n_avg is accepted, as `fit_telegraph_psd`
+    # accepts it (fixed in 0.12.0: int() truncated it, so n_avg = 1.5
+    # was planned as 1)
+    n_avg = float(n_avg)
+    if not (np.isfinite(n_avg) and n_avg >= 1.0):
+        raise ValueError("n_avg must be finite and >= 1 (the number of "
+                         "averaged periodograms behind each bin)")
     f = np.asarray(f_hz, dtype=float).ravel()
     jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor)
     fisher = jac.T @ jac / _log_var(n_avg)

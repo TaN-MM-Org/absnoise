@@ -86,7 +86,7 @@ def allan_variance(x, dt, m_list=None):
     return taus, avar
 
 
-def avar_exponential(var, tau_c, T):
+def avar_exponential(var: float, tau_c: float, T):
     """Closed-form Allan variance of exponentially correlated noise.
 
     var : process variance (for a telegraph occupation, f (1 - f)).
@@ -97,18 +97,44 @@ def avar_exponential(var, tau_c, T):
     - tau e^(-2T/tau)), the two-sample variance of a process with
     autocovariance var * exp(-|t|/tau). Limits: var * 2T/(3 tau) for
     T << tau, and S(0)/(2T) with S(0) = 4 var tau for T >> tau.
+
+    For T < tau/2 (changed in 0.12.0) the bracket is summed as its
+    Taylor series in r = T/tau,
+    sum_{k>=3} (-1)^k (4 - 2^k) r^k / k! = 2r^3/3 - r^4/2 + ...,
+    because the four terms of the closed form cancel to order r^3:
+    up to 0.11.0 the result was 6e-5 too low at T = 1e-4 tau, 17 % too
+    high at 1e-5 tau and negative at 1e-6 tau.
     """
     v = float(var)
     tau = float(tau_c)
-    if v < 0.0 or tau <= 0.0:
-        raise ValueError("var must be >= 0 and tau_c > 0")
+    if not (np.isfinite(v) and v >= 0.0 and np.isfinite(tau)
+            and tau > 0.0):
+        raise ValueError("var must be finite and >= 0, and tau_c finite "
+                         "and > 0")
     T = np.asarray(T, dtype=float)
-    if np.any(T <= 0.0):
-        raise ValueError("averaging times must be positive")
+    if np.any(T <= 0.0) or not np.all(np.isfinite(T)):
+        raise ValueError("averaging times must be finite and positive")
     r = T / tau
-    out = v * (tau / T ** 2) * (2.0 * T - 3.0 * tau
-                                + 4.0 * tau * np.exp(-r)
-                                - tau * np.exp(-2.0 * r))
+    with np.errstate(over="ignore", invalid="ignore"):
+        out = v * (tau / T ** 2) * (2.0 * T - 3.0 * tau
+                                    + 4.0 * tau * np.exp(-r)
+                                    - tau * np.exp(-2.0 * r))
+    small = r < 0.5
+    if np.any(small):
+        rs = r[small] if out.ndim else r
+        # bracket / tau = sum_{k>=3} c_k r^k; terms fall like 1/k!, so
+        # 24 terms reach machine precision for r < 0.5
+        term = np.ones_like(rs)
+        series = np.zeros_like(rs)
+        for k in range(1, 27):
+            term = term * rs / k                 # r^k / k!
+            if k >= 3:
+                series = series + (-1.0) ** k * (4.0 - 2.0 ** k) * term
+        val = v * series / rs ** 2
+        if out.ndim:
+            out[small] = val
+        else:
+            out = np.asarray(val)
     return float(out) if out.ndim == 0 else out
 
 
