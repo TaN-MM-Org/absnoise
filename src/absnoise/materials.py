@@ -88,7 +88,7 @@ def ep_power(Te, Tp: float, area: float, sigma: float = 2.0,
     """Electron-phonon cooling power (W), P = Sigma A (Te^d - Tp^d).
     Default: resonant-supercollision regime delta = 3 with
     Sigma = 2.0 W m^-2 K^-3 (measured for hBN-encapsulated graphene JJ
-    bolometers, Lee et al. Nature 586, 42 (2020): 2.1-3.3)."""
+    bolometers, Lee et al. Nature 586, 42 (2020): best fits 2.04-3.30)."""
     Te = np.asarray(Te, dtype=float)
     return sigma * area * (Te**delta - Tp**delta)
 
