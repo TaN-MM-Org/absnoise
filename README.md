@@ -41,6 +41,8 @@ number that looks fine but is not.
 - [Install](#install)
 - [Units and conventions](#units-and-conventions)
 - [Examples](#examples) (each with the output it prints)
+- [Tutorials](#tutorials) (two end-to-end scripts in `examples/`)
+- [What changed in 0.13.0](#what-changed-in-0130)
 - [What changed in 0.12.0](#what-changed-in-0120)
 - [What changed in 0.11.0](#what-changed-in-0110)
 - [What is in the package](#what-is-in-the-package)
@@ -77,6 +79,10 @@ number that looks fine but is not.
   the package solves the exact levels.
 - **Recipe** -- one junction design: materials, `Tc`, size, gate
   voltage, transparency, measured critical current and resistance.
+- **Matsubara sum**: a standard way to write a thermal quantity as a
+  sum over the frequencies `(2n+1) pi kB T / hbar` (n = 0, 1, 2, ...).
+  For a junction it gives the free energy of the levels and of the
+  continuum together, without finding the levels.
 
 **The noise**
 
@@ -158,7 +164,8 @@ run `pip install -e .[test]`, then `pytest`.
 ## Examples
 
 Each example below runs as written, and the output shown is what it
-printed with absnoise 0.12.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
+printed with absnoise 0.13.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
+Examples 1 to 10 print the same as with 0.12.0.
 Values not taken from the shipped recipes -- correlation times,
 geometries, noise levels -- are illustrative, not measurements.
 
@@ -680,6 +687,186 @@ smaller values. A large p-value means that no departure was found, not
 that the model is proven. `dwell_times` returns the stays themselves,
 for a histogram.
 
+### 11. Josephson inductance and Kerr term of a finite-length junction
+
+```python
+import numpy as np
+from absnoise import RECIPES, JunctionModel, junction_properties, gap_bcs
+from absnoise.constants import HBAR, E_CHARGE
+
+r = RECIPES[1]                               # Ti/Al/Au: L = 0.2 um, xi = 5.1 um
+out = junction_properties(r, np.array([0.02, 0.225]))
+for T, Ic, a1, a3 in zip(out["T"], out["Ic"], out["dIdphi0"], out["a3"]):
+    LJ = HBAR / (2 * E_CHARGE) / a1          # Josephson inductance at phi = 0
+    print(f"T = {T:.3f} K: Ic = {Ic * 1e6:.3f} uA, L_J = {LJ * 1e9:.4f} nH, "
+          f"a3/a1 = {a3 / a1:.4f}")
+
+# the current at phi = pi/2, calculated two independent ways
+m = JunctionModel(r)                         # 121 phases; m.phis[60] = pi/2
+m.Delta = gap_bcs(0.225, r.Tc, r.Delta)
+I_levels = m.current_phase(0.225)[60]        # bound levels + continuum
+I_sum = m.cpr_matsubara(0.225, m.phis[60])   # Matsubara sum
+print(f"I(pi/2): levels + continuum {I_levels * 1e6:.5f} uA, "
+      f"Matsubara sum {I_sum * 1e6:.5f} uA (scale 1)")
+```
+
+```
+T = 0.020 K: Ic = 2.110 uA, L_J = 0.2195 nH, a3/a1 = -0.0594
+T = 0.225 K: Ic = 2.007 uA, L_J = 0.2219 nH, a3/a1 = -0.0640
+I(pi/2): levels + continuum 3.67599 uA, Matsubara sum 3.67775 uA (scale 1)
+```
+
+The full model of a recipe (`JunctionModel`) counts every transverse
+channel at its real length, with the states above the gap (the
+continuum). Since 0.13.0 the slope `a1 = I'(0)`, which sets the
+Josephson inductance `L_J = (hbar/2e) / a1`, and the cubic term `a3`
+of the current-phase relation `I = a1 phi + a3 phi^3 + ...` are exact
+for this model (`cpr_series`). They come from the free energy written
+as a sum over Matsubara frequencies (P. W. Brouwer and C. W. J.
+Beenakker, Chaos, Solitons & Fractals 8, 1249 (1997), Eqs. (6) and (8)). That
+sum needs no level search and does not split bound levels from the
+continuum, so it stays accurate near zero phase, where bound levels
+leave the gap and the two parts nearly cancel. `cpr_matsubara` gives
+the whole current-phase relation the same way. The last line compares
+it with the level-based `current_phase` at `phi = pi/2`; the two
+calculations differ by 5e-4, the size of the energy and phase grid
+errors of `current_phase`. 0.12.1 fitted `a1` and `a3` to the
+level-based current and printed `a3/a1 = -0.0679` at 0.225 K here (6 %
+off) and `L_J = 0.2198 nH` at 20 mK; its `JunctionModel.dIdphi0` was
+57 % low for this recipe (see the corrections below).
+
+### 12. The electron-phonon cooling law from a heating curve
+
+```python
+import numpy as np
+from absnoise import RECIPES, SensorBudget, ep_temperature, fit_ep_coupling
+
+r = RECIPES[1]                               # Ti/Al/Au, area 0.2 um x 1.8 um
+P = np.concatenate([[0.0, 0.0], np.geomspace(1e-17, 3e-14, 12)])  # heater (W)
+rng = np.random.default_rng(5)               # illustrative "measurement":
+Te = ep_temperature(P, 0.03, r.area, 2.5, 3.0) + rng.normal(0.0, 1e-3, P.size)
+
+fit = fit_ep_coupling(P, Te, r.area, Tp_K=0.03, sigma_Te=1e-3, fit_Tp=True)
+print(f"Sigma = {fit.Sigma:.2f} +- {fit.sigma['Sigma']:.2f} W m^-2 K^-delta, "
+      f"delta = {fit.delta:.3f} +- {fit.sigma['delta']:.3f}, "
+      f"Tp = {fit.Tp * 1e3:.1f} +- {fit.sigma['Tp'] * 1e3:.1f} mK")
+print(f"chi2 = {fit.chi2:.1f} for {fit.chi2_dof} degrees of freedom")
+
+T = 0.225                                    # operating temperature (K)
+G = fit.propagate(lambda s, d: SensorBudget(r, sigma=s, delta=d).Gep(T))
+print(f"G_ep at {T} K: {G['value'] * 1e15:.1f} +- {G['sigma'] * 1e15:.1f} fW/K")
+
+low = fit_ep_coupling(P[:5], Te[:5], r.area, Tp_K=0.03, sigma_Te=1e-3)
+print(f"five lowest powers only: delta = {low.delta:.1f} +- {low.sigma['delta']:.1f}")
+```
+
+```
+Sigma = 2.50 +- 0.06 W m^-2 K^-delta, delta = 3.002 +- 0.015, Tp = 29.5 +- 0.6 mK
+chi2 = 12.0 for 11 degrees of freedom
+G_ep at 0.225 K: 136.2 +- 1.0 fW/K
+five lowest powers only: delta = 2.1 +- 1.5
+```
+
+Every detector number of `SensorBudget` depends on the cooling law
+`P = Sigma A (Te^delta - Tp^delta)`, whose default (`Sigma = 2.0`,
+`delta = 3`) follows Lee et al. `fit_ep_coupling` (new in 0.13.0)
+measures it on your own device, the way Lee et al. did: from the
+electron temperature at several heater powers. It fits `Te` (the
+measured quantity) with the closed form
+`Te = (Tp^delta + P / (Sigma A))^(1/delta)`, can fit the bath
+temperature too, and gives error bars and a chi-square. `propagate`
+carries them into any number computed from `(Sigma, delta)`, as
+`IcFit.propagate` does for the Ic(T) fit. The last line shows why the
+heating range matters: close to the bath the law is nearly linear, and
+only the conductance `G` is determined, not `Sigma` and `delta`
+apart. The fit warns when every point stays within 10 % of the bath
+(in `Te^delta`), and refuses when the exponent runs to the end of its
+search range (1 to 8) or the parameters cannot be told apart.
+
+## Tutorials
+
+Two end-to-end scripts in the `examples/` folder go from synthetic
+"measured" data (fixed seeds, illustrative true values) to a final
+result with error bars. Each prints a short summary; the test suite
+runs both and checks every printed number against the output below.
+
+**`examples/tutorial_detector_budget.py`** (a few seconds): an Ic(T)
+curve and a heating curve, fitted with `fit_ic_curve` and
+`fit_ep_coupling`, give the junction and its cooling law; the detector
+budget built from them gives the thermal time, the phonon NEP and the
+energy resolution. The error bars of both fits are carried through
+with `propagate` and added in quadrature (the two curves are
+independent measurements).
+
+```
+Ic(T) fit:   Ic0 = 2.006 +- 0.006 uA, Tc = 0.7514 +- 0.0022 K, tau = 0.793 +- 0.013
+heating fit: Sigma = 2.51 +- 0.06 W m^-2 K^-delta, delta = 2.991 +- 0.020, chi2 = 6.6 for 13 dof
+budget at T = 0.200 K, tauA = 1 us (illustrative):
+  thermal time tau_th = 0.69 +- 0.01 ns
+  phonon NEP = 5.19e-19 +- 0.02e-19 W/sqrt(Hz)
+  energy resolution = 1.998e-22 J +- 0.014e-22 (Ic fit) +- 0.009e-22 (heating fit)
+                    = 1.998e-22 +- 0.016e-22 J, the energy of a 301 +- 2 GHz photon
+```
+
+**`examples/tutorial_readout_trace.py`** (about 10 s): a noisy readout
+trace of one Andreev level. The decoder gives the occupation and the
+correlation time with error bars, `markov_dwell_test` checks the
+single-rate model, the noise spectrum of the same record gives a
+second estimate of the correlation time, and the occupation-noise
+temperature resolution of Ti/Al/Au at 0.3 `Tc` follows for that
+correlation time. It scales exactly as `sqrt(tauA)`: Example 1 gives
+40.48 uK for 1 us, and 40.48 uK times `sqrt(998)` is 1279 uK. Both
+estimates of the correlation time come from the same record, so the
+"difference" line is a loose consistency check, not a test.
+
+```
+decoder:  f = 0.301 +- 0.011, tauA = 0.998 +- 0.031 ms (EM iterations: 6)
+model check: p = 0.92 (dispersion 0.90 empty, 0.93 filled; 637 and 638 stays)
+spectrum: tauA = 0.974 +- 0.033 ms (chi2 = 1993 for 2045 dof)
+difference decoder - spectrum: 0.5 error bars
+Ti/Al/Au at 0.225 K: dT_A in 1 s = 1279.01 +- 20.03 uK for tauA = 0.998 ms
+```
+
+## What changed in 0.13.0
+
+New:
+
+- `JunctionModel.cpr_series(T)` and `JunctionModel.cpr_matsubara(T)`:
+  the exact slope and cubic term of the current-phase relation, and the
+  whole relation, of the finite-length model with its continuum, from
+  the Matsubara-sum free energy (Example 11). `junction_properties` and
+  `JunctionModel.dIdphi0` now use them.
+- `fit_ep_coupling(P, Te, area, Tp)` and `EPCouplingFit`: the
+  electron-phonon cooling law (`Sigma`, `delta`, optionally the bath
+  temperature) from a measured heating curve, with error bars and
+  `propagate` (Example 12). `ep_temperature` is its model curve.
+- Two tutorials in `examples/` (see [Tutorials](#tutorials)).
+
+Corrected (details and before/after numbers under
+[Corrections in earlier versions](#corrections-in-earlier-versions)):
+
+- `JunctionModel.dIdphi0` (44 % low for a zero-length junction, 57 %
+  low for Ti/Al/Au) and the `a3` of `junction_properties` (6 % off for
+  Ti/Al/Au).
+- `abs_energies` at zero phase: it returned one level of each
+  degenerate pair, so `FiniteLJunction` at `phi = 0` counted half of
+  the occupation heat capacity.
+- `ShortJunction.dlnIc_dT` and `dlnI1_dT` far below and just below
+  `Tc` (inf, NaN or -inf).
+- `sigma_spectrum` for tiny occupations (it stopped with an
+  `AssertionError`) and for small rates (it returned zero).
+- `continuum_share` below about 0.03 `Tc` (`ZeroDivisionError`, for
+  example at 20 mK for Ti/Al/Au) and below 0.002 `Tc` (evaluated at a
+  negative temperature).
+- `SensorBudget.nep_spectrum` accepted a negative readout floor.
+
+Faster, with the same results: `telegraph_traces` (identical traces;
+4 times faster for the 64 channels of Example 5, about 350 times for
+one channel), and the level search and free energy of `JunctionModel`
+(levels about 2.8 times faster, free energy 2.4 times, `calibrate` 2.4
+times; free energy equal to 1e-13). No function was renamed or removed. `JunctionModel.dIdphi0`
+ignores its `k` argument (with a `DeprecationWarning`).
+
 ## What changed in 0.12.0
 
 New:
@@ -758,7 +945,10 @@ The corrections, with before/after numbers, are listed under
   levels, and `saturation_ratio` (1 means on the bound).
 - `JunctionModel`, `junction_properties` -- the full mode-summed model
   of a recipe, including states above the gap (the continuum),
-  calibrated to the measured `Ic` at 20 mK.
+  calibrated to the measured `Ic` at 20 mK. Since 0.13.0,
+  `JunctionModel.cpr_series` (exact `I'(0)` and phase-cubic term) and
+  `JunctionModel.cpr_matsubara` (the current-phase relation) evaluate
+  the same model as a sum over Matsubara frequencies.
 - `continuum_share`, `occupation_heat_capacities` -- how much of the
   current, and of the occupation heat capacity, comes from the
   continuum.
@@ -771,6 +961,9 @@ The corrections, with before/after numbers, are listed under
   electron-phonon cooling power and thermal conductance.
 - `steady_temperature` -- the electron temperature at which cooling
   balances a steady absorbed power (readout self-heating).
+- `fit_ep_coupling`, `EPCouplingFit`, `ep_temperature` (0.13.0): fit
+  the cooling law to a measured heating curve; the fit result (with
+  `G` and `propagate`); the model curve.
 
 **Occupation noise**
 
@@ -903,10 +1096,27 @@ gives its inputs, units and conventions.
   more (successive samples anti-correlated: no telegraph process does
   that); `uncertainties` finds that the likelihood is not at a
   maximum or does not determine all five parameters.
+- `fit_ep_coupling` (0.13.0) gets arrays of different lengths,
+  non-finite values, a negative power, a non-positive temperature,
+  area or error, too few points (the number of fitted parameters plus
+  1, or plus 2 without errors), no heated point, or no point above the
+  bath. It refuses a fit whose exponent ends at the edge of its search
+  range (1 to 8) and data that cannot separate the parameters, and it
+  warns when every point stays within 10 % of the bath in `Te^delta`.
+  `EPCouplingFit.propagate` refuses in the same cases as
+  `IcFit.propagate`. `ep_temperature` refuses a negative power and
+  non-positive parameters.
+- `sigma_spectrum` (0.13.0) gets `f` outside [0, 1], a non-positive or
+  non-finite `Gs`, or a negative `Gp`.
+- `ShortJunction.dlnIc_dT` and `dlnI1_dT` (0.13.0) get a temperature
+  that is not positive or is at or above `Tc`; `continuum_share` gets a
+  temperature outside (0, `Tc`). `SensorBudget.nep_spectrum` refuses a
+  negative or non-finite readout floor (0.13.0), as `energy_resolution`
+  already did.
 
 ## How the results are checked
 
-160 automated tests run on every push and pull request, on Python 3.9,
+200 automated tests run on every push and pull request, on Python 3.9,
 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.9 with the
 oldest NumPy (1.24.0) and SciPy (1.10.0) the package allows. The
 numerical checks compare the package with an exact formula, a second
@@ -941,6 +1151,30 @@ check that refusals fire. The main checks:
   `JunctionModel` code path to 5e-4.
 - Short junction: the continuum carries no phase dependence (below
   1e-14).
+- Levels at zero phase (0.13.0): the degenerate pair is returned twice,
+  equal to the levels at `phi = 1e-6` within 1e-6; near zero phase
+  (1e-9 to 1e-5) the levels satisfy the level condition with the angle
+  `2 asin(sqrt(tau) sin(phi/2))` computed in the test to 1e-12 of that
+  angle, and their splitting equals the first-order closed form within
+  1e-5; `FiniteLJunction` gives the same `C_A` at `phi = 0` and
+  `1e-7` (1e-9); away from the degeneracy the levels are identical to
+  those of 0.12.1. For `tau = 1` the level near zero energy close to
+  `phi = pi` is found (first-order closed form, 1e-6).
+- Matsubara-sum current (0.13.0): for zero length it equals the
+  closed-form short-junction current at every phase to 1e-9 of its
+  maximum, at 0.027, 0.3 and 0.9 `Tc`, and its slope and cubic term
+  equal their closed forms (derived in the test) to 1e-9 and 1e-8. At
+  finite length (Ti/Al(thick)) it agrees with the level-plus-continuum
+  `current_phase`, an independent calculation, within 2e-3 of the
+  maximum away from zero phase, and its slope with an odd polynomial
+  fitted to that current within 3e-3. The Legendre chi function used
+  for the tail equals its series (1e-13) and `pi^2/8` at 1.
+  `junction_properties` returns the closed-form slope and cubic term
+  (1e-9, 1e-8; 0.12.1 was more than 1 % off in the cubic term), and
+  `dIdphi0` the closed-form slope (0.12.1: 44 % low).
+- Free energy speed-up (0.13.0): `free_energy_multi` and
+  `free_energy_components` equal the 0.12.1 phase-by-phase loop (kept
+  in the tests) to 1e-13 relative.
 
 **Occupation noise and the bound**
 
@@ -965,6 +1199,15 @@ check that refusals fire. The main checks:
   within 0.01 (the first-order rule would give 0).
 - Periodogram: `sum(S) df` equals the variance of the data to 1e-12
   (Parseval), for even and odd lengths.
+- `sigma_spectrum` (0.13.0): for `f` down to 1e-200 and at 0 and 1
+  the variance, plateau and correlation time equal the closed form of
+  two independent spins (1e-12; 0.12.1 stopped with an
+  `AssertionError`); scaling all rates by 1e-20 to 1e15 rescales the
+  result exactly (1e-12; 0.12.1 returned 0 below 1e-14); for ordinary
+  inputs it equals the 0.12.1 code (kept in the tests) to 1e-12.
+- Telegraph speed-up (0.13.0): the traces are identical to those of the
+  0.12.1 step-by-step loop (kept in the tests) for eight sets of
+  occupations, time steps and shapes, including block boundaries.
 - `occupation_heat_capacities`: the bound part equals the level sum
   `C_A` of `FiniteLJunction` within 1e-5 (two code paths); the
   continuum part is exactly 0 at zero length; for Ti/Al/Au at 0.3 `Tc`
@@ -1004,7 +1247,15 @@ check that refusals fire. The main checks:
   NEP integral on its own grid to 1e-10, and lies 3.3 % and 10.7 %
   above the closed form for `tauA` = 1 us and 1 ns.
 - Out-of-range temperatures, correlation times and averaging times
-  are refused.
+  are refused, and (0.13.0) a negative readout floor in `nep_spectrum`.
+- Log slopes (0.13.0): `ShortJunction.dlnIc_dT` at 0.99, 0.999 and
+  0.9999 `Tc` equals a five-point derivative of `ic_model` (a separate
+  implementation of Ic(T)) within 5e-3 (0.12.1: -inf above 0.998
+  `Tc`); at 10 mK for MoRe both slopes are finite and below 1e-12
+  (0.12.1: inf and NaN); at 0.5 `Tc` the value is the 0.12.1 one,
+  bit for bit.
+- `continuum_share` at 0.027 `Tc` returns a finite current share and
+  NaN for the derivative share (0.12.1: `ZeroDivisionError`).
 
 **Recipes and thermal model**
 
@@ -1015,6 +1266,18 @@ check that refusals fire. The main checks:
   8 `kB`.
 - `steady_temperature` round trip: `ep_power(steady_temperature(P))`
   returns `P` within `max(1e-12 P, 1e-30 W)`.
+- Cooling-law fit (0.13.0): noise-free data return `Sigma`, `delta`
+  (1e-8) and the bath temperature (1e-7); a Nelder-Mead search on a
+  chi-square coded in the test finds the same minimum (1e-6); with
+  `delta` and `Tp` fixed the error bar of `Sigma` equals the closed form
+  `[sum (dTe/dSigma / sigma)^2]^(-1/2)` (1e-6); over 150 noisy fits the
+  scatter of `Sigma` and `delta` is between 0.8 and 1.2 times the
+  reported error bars and their means are within 4 standard errors of
+  the true values; `G` equals `SensorBudget.Gep` with the fitted
+  parameters (1e-14) and a numerical derivative of `ep_power` (1e-8);
+  `propagate` is exact for a linear function (1e-10) and for `Sigma^2`
+  (1e-9), and uses the marginal block when `Tp` is fitted; refusals
+  and the near-linear warning fire.
 
 **Single photons**
 
@@ -1100,6 +1363,10 @@ check that refusals fire. The main checks:
   all thresholds to 1e-12.
 - Files: Ic files round-trip exactly; trace files round-trip the
   samples exactly and `dt` within 1e-18 s.
+- Tutorials (0.13.0): both scripts in `examples/` run in the tests,
+  and every printed line matches the output given in the README and
+  in the script, each number within two units of its last printed
+  digit.
 
 **Planning**
 
@@ -1116,7 +1383,65 @@ check that refusals fire. The main checks:
 
 ## Corrections in earlier versions
 
-**0.12.0 (this release) corrects five results of 0.11.0.** Each was
+**0.13.0 (this release) corrects six results of 0.12.1.** Each was
+found by a test that fails on 0.12.1 and passes now
+(`tests/test_v013.py`). None of them changes the output of Examples 1
+to 10.
+
+- **The slope of the full model at zero phase.**
+  `JunctionModel.dIdphi0` fitted a cubic to the first 8 points of
+  `current_phase`. The first point is a one-sided difference, about 14
+  times too large, and the next points scatter by up to 17 % because
+  bound levels leave the gap there and the bound and continuum parts
+  nearly cancel. For a junction of zero length, where the exact slope
+  is known in closed form, the result was 44 % low; for Ti/Al/Au at
+  0.3 `Tc` it was 1.229e-6 instead of 2.865e-6 A/rad (before the
+  calibration scale). `junction_properties` used a two-term fit over
+  0 to 0.76 rad (`cpr_coeffs`) instead: its slope was within 5e-4,
+  but its cubic term `a3` was 2.3 % off for zero length and 6.1 % for
+  Ti/Al/Au at 0.3 `Tc` (-1.0077e-7 instead of -9.495e-8 A/rad^3; slope
+  1.484052e-6 instead of 1.483368e-6 A/rad). Both now come from the
+  exact Matsubara sum (`cpr_series`). `cpr_coeffs` itself is unchanged.
+- **Levels at zero phase.** At `phi = 0` the two levels of each
+  Andreev pair coincide, and `abs_energies` returned them once. The
+  same happened for every phase below about `2e-8 / sqrt(tau)`,
+  because the angle `arccos(1 - tau + tau cos(phi))` was taken of a
+  number already rounded to 1. `FiniteLJunction` at `phi = 0` then
+  counted half of the occupation heat capacity (Ti/Al(thick) at 0.3
+  `Tc`: 1.7417e-21 instead of 3.4835e-21 J/K). The angle now comes from
+  `2 asin(sqrt(tau) sin(phi/2))` near zero phase (and from a matching
+  form near `pi`, which also finds the level near zero energy of a
+  transparent channel close to `phi = pi`), and equal levels are kept.
+  Away from those points the levels are identical to 0.12.1.
+- **Log slopes of the short junction.** `ShortJunction.dlnIc_dT` and
+  `dlnI1_dT` used a fixed step of 2e-3 `Tc`. Below that temperature
+  the lower point was negative (MoRe at 10 mK: inf and NaN instead of
+  0); within 2e-3 `Tc` of `Tc` the upper point had no supercurrent
+  (Ti/Al/Au at 0.999 `Tc`: -inf instead of -1320 1/K). The step is
+  now at most `T/2` and `(Tc - T)/10`; between 0.004 and 0.98 `Tc` it
+  is unchanged. Between 0.98 and 0.998 `Tc` the values change because
+  the old step was too coarse there (at 0.997 `Tc`: -532.6 before,
+  -443.6 now, against -442.1 from a fine derivative of `ic_model`; the
+  new step leaves a difference error below 0.4 % up to `Tc`).
+- **Master equation with tiny occupations or slow rates.**
+  `sigma_spectrum` divided by the square root of the stationary
+  probabilities, which underflows for `f` below about 1e-162, and
+  stopped with an `AssertionError` there and at `f = 0` or 1. It also
+  dropped every mode with a rate below 1e-14 in the chosen unit, so
+  with `Gs = Gp = 1e-15` it returned `S0 = 0` and `tau_eff = 0`
+  (instead of `0.75 / Gs`). It now builds the symmetrized rate matrix
+  from its closed-form entries and removes only the stationary mode.
+- **`continuum_share` at low temperature.** Below about 0.03 `Tc`
+  `dI/dT` is below rounding, and the share of `dI/dT` was 0/0: 0.12.1
+  stopped with `ZeroDivisionError` (Ti/Al/Au at 20 mK, for example).
+  Below 0.002 `Tc` its temperature step reached negative temperatures.
+  It now returns NaN for that share, and the step is limited as for
+  the log slopes.
+- **Negative readout floor in `nep_spectrum`.** It was accepted and
+  gave a NaN readout channel and a total below the other channels;
+  it is refused now, as in `energy_resolution`.
+
+**0.12.0 corrects five results of 0.11.0.** Each was
 found by a test that fails on 0.11.0 and passes now
 (`tests/test_v012.py`). None of them changes the output of an example
 in this README.
@@ -1274,6 +1599,26 @@ No earlier release records a correction. The full history is in
   levels only; `occupation_heat_capacities` gives the size of the
   continuum part at one phase (the tests check its sign and size only
   for Ti/Al/Au).
+- `JunctionModel.current_phase` (and so `Ic`, `calibrate` and the
+  `Ic` of `junction_properties`) still uses bound levels plus the
+  continuum on an energy grid, differentiated on the phase grid. It
+  differs from the exact Matsubara sum (`cpr_matsubara`) by about 5e-4
+  of `Ic` away from zero phase, and its two end points (`phi = 1e-3`
+  and `pi - 1e-3`, one-sided differences) are off by 1 to 2 % of `Ic`
+  (zero-length test case). Its maximum lies inside the grid for the
+  shipped recipes. These values are kept as they were, so that
+  calibrations stay unchanged; use `cpr_matsubara` where these errors
+  matter.
+- `JunctionModel.cpr_coeffs` is a two-term fit over 0 to 0.76 rad and
+  keeps the bias of the neglected higher terms (2 to 6 % in `a3`);
+  `cpr_series` gives the exact coefficients.
+- The Matsubara sum runs to 2000 times the gap and adds the rest of
+  its leading term in closed form; the remainder is about 1e-10
+  relative. Its cost grows as `1/T`.
+- `fit_ep_coupling` fits one power law with one bath temperature. It
+  takes the absorbed power as exact (put the uncertainty of your
+  heater calibration into the result yourself), and the error bars are
+  first order: inspect `cov` when `delta` is poorly determined.
 - The continuum occupation *noise* is not modelled: it would need a
   correlation-time model with material parameters this package does
   not invent (its thermodynamic weight is computed).
@@ -1341,7 +1686,13 @@ compared with J. C. Mather, Appl. Opt. 21, 1125 (1982). The Allan
 variance follows D. W. Allan, Proc. IEEE 54, 221 (1966) and W. J.
 Riley, Handbook of Frequency Stability Analysis, NIST Special
 Publication 1065 (2008). The temperature design follows F. Pukelsheim,
-Optimal Design of Experiments, SIAM (2006). Near `Tc` the gap equation
+Optimal Design of Experiments, SIAM (2006). The Matsubara-sum free
+energy of `cpr_series` and `cpr_matsubara` follows from Eqs. (6) and (8) of P. W. Brouwer
+and C. W. J. Beenakker, Chaos, Solitons & Fractals 8, 1249 (1997); the
+tests check it against the closed-form short-junction current. The
+heating-curve fit of `fit_ep_coupling` is the analysis of Lee et al.
+(their Fig. 4c and Table I: `delta = 3`, `Sigma` = 2.04 to 3.30
+W m^-2 K^-3). Near `Tc` the gap equation
 is solved in its Matsubara-sum form, which follows from the integral
 form through the partial-fraction expansion
 `tanh(x/2) / x = sum_n 4 / (x^2 + (2n+1)^2 pi^2)`; the tests check the

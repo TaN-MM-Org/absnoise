@@ -1,5 +1,143 @@
 # Changelog
 
+## 0.13.0 (2026-10-17)
+
+Exact inductance and Kerr term for the full finite-length model, a fit
+of the electron-phonon cooling law to a measured heating curve, two
+end-to-end tutorials, six corrections (each found by a test that fails
+on 0.12.1), and faster telegraph simulation and level search. No
+function was renamed or removed; README Examples 1 to 10 print the
+same output as with 0.12.0.
+
+### Added
+
+- `JunctionModel.cpr_series(T)`: the exact Taylor coefficients
+  (a1, a3) of I(phi) = a1 phi + a3 phi^3 + ... of the finite-length
+  model, bound states and continuum together, from the Matsubara-sum
+  free energy F = -2 kB T sum_n ln D(i w_n) (P. W. Brouwer and
+  C. W. J. Beenakker, Chaos, Solitons & Fractals 8, 1249 (1997),
+  Eqs. (6) and (8)) with D(i w) = 1 + 2 R x + x^2 and
+  x = exp(-2 arcsinh(w/Delta) - c w). `JunctionModel.cpr_matsubara(T, phis)`: the whole
+  current-phase relation the same way (no level search, no finite
+  differences; for Ti/Al/Au with 121 phases 0.21 s against 2.15 s for
+  the 0.13.0 `current_phase`, median of 5).
+  `absnoise.levels.matsubara_free_energy_terms` is the per-channel
+  building block. The sum runs to 2000 Delta and adds the rest of its
+  large-frequency form in closed form (Legendre chi function), so the
+  truncation is about 1e-10. README Example 11.
+- `fit_ep_coupling(P_W, Te_K, area, Tp_K, sigma_Te=None, delta=None,
+  fit_Tp=False)` and `EPCouplingFit` (with `G(T)` and `propagate`):
+  Sigma, delta and optionally the bath temperature of
+  P = Sigma A (Te^delta - Tp^delta) from a measured electron
+  temperature versus heater power, fitted in Te with the closed form
+  of `steady_temperature`, as G.-H. Lee et al., Nature 586, 42 (2020)
+  did (their Fig. 4c and Table I). Linearized covariance, chi-square
+  with Te errors; refuses an exponent at the end of its search range
+  (1 to 8) and inseparable parameters; warns when the data stay in the
+  linear regime. `ep_temperature`: the model curve. README Example 12.
+- `examples/tutorial_detector_budget.py` and
+  `examples/tutorial_readout_trace.py`, and a "Tutorials" section in
+  the README with their output.
+
+### Fixed
+
+- `JunctionModel.dIdphi0` fitted a cubic to the first 8 points of
+  `current_phase`, whose first point is a one-sided difference (about
+  14 times too large) and whose next points scatter by up to 17 %
+  where bound levels leave for the continuum. Zero-length junction
+  (closed form known): 44 % low -> exact (1e-9). Ti/Al/Au at 0.3 Tc
+  (scale 1): 1.229e-6 -> 2.865e-6 A/rad. It now returns the exact
+  slope; `k` is ignored with a DeprecationWarning.
+- `junction_properties` took dIdphi0 and a3 from `cpr_coeffs`, a
+  two-term fit over 0 < phi < 0.76 rad. Ti/Al/Au at 0.3 Tc:
+  a3 -1.0077e-7 -> -9.495e-8 A/rad^3 (6.1 %), dIdphi0
+  1.484052e-6 -> 1.483368e-6 A/rad (4.6e-4); zero length: a3 2.3 %
+  off -> exact (1e-8). Now from `cpr_series`. `cpr_coeffs` is
+  unchanged (its docstring now states the bias).
+- `abs_energies` merged the two levels of a degenerate pair (phi = 0,
+  and tau = 1 at phi = pi), and arccos of the rounded
+  R = 1 - tau + tau cos(phi) gave a = 0 for every |phi| below about
+  2e-8/sqrt(tau). Levels at phi = 0 (tau = 0.7, c Delta = 3): 1 -> 2;
+  first-order doublet splitting at phi = 1e-6: off by 7.6e-5 -> 1.6e-10;
+  `FiniteLJunction` C_A for Ti/Al(thick) at 0.3 Tc, phi = 0:
+  1.741741e-21 -> 3.483482e-21 J/K (the value at phi = 1e-7); tau = 1
+  at phi = pi - 1e-9: 0 -> 1 level (E = 2.0e-10 Delta). Where
+  1 - |R| >= 1e-3 the levels are bit-identical to 0.12.1.
+- `ShortJunction.dlnIc_dT` / `dlnI1_dT` used the step 2e-3 Tc
+  always. MoRe at 10 mK: inf / NaN -> 0.0 / 0.0; Ti/Al/Au at
+  0.999 Tc: -inf -> -1320.07 1/K (fine derivative of `ic_model`:
+  -1315.8); at 0.997 Tc: -532.63 -> -443.60 (reference -442.12). The
+  step is now min(rel Tc, T/2, (Tc - T)/10), unchanged between
+  0.004 Tc and 0.98 Tc; T <= 0 and T >= Tc are refused.
+- `sigma_spectrum`: f = 1e-200 and f = 0 or 1: AssertionError ->
+  closed form (var 2f(1-f), tau_eff 1/Gs); Gs = Gp = 1e-15:
+  S0 Gs = 0, tau_eff Gs = 0 -> 1.125, 0.75 (the values for
+  Gs = Gp = 1). The symmetrized generator is built from its closed-form
+  entries and only the stationary mode is dropped; other results agree
+  with 0.12.1 to 1e-12.
+- `continuum_share`: ZeroDivisionError below about 0.03 Tc (Ti/Al/Au
+  at 20 mK) -> share_dIdT NaN (dI/dT is below rounding there), and
+  below 0.002 Tc the step no longer reaches negative temperatures.
+- `SensorBudget.nep_spectrum` accepted a negative readout floor
+  (readout NaN, total 6.28418e-18 below the Andreev plus phonon
+  6.28420e-18 W/sqrt(Hz) in the Example 1 setup); now refused, as in
+  `energy_resolution`.
+
+### Changed
+
+- `sigma_spectrum` refuses f outside [0, 1], Gs <= 0 and Gp < 0;
+  `continuum_share` and the log slopes refuse T outside (0, Tc).
+- `junction_properties` converts `T_grid` to a float array.
+- Type hints on the public functions touched.
+
+### Performance
+
+Median of 7 runs, same machine, 0.12.1 -> 0.13.0, two interleaved
+rounds (the machine was shared with other jobs):
+
+- `telegraph_traces`, vectorized in time with the same random stream:
+  identical traces (tested against the 0.12.1 loop). README Example 5
+  call (40 000 steps, 64 channels): 0.364 s -> 0.084 s and
+  0.362 s -> 0.089 s in the two rounds (4.1 to 4.3 times); one
+  channel, 20 000 steps: 0.161 s -> 0.46 ms (about 350 times).
+- `abs_energies`: scalar path of the root function without
+  `numpy.clip` (bit-identical); `JunctionModel.compute_levels` for
+  Ti/Al/Au with 41 phases: 0.51 s -> 0.17 s (2.7 to 3.0 times).
+- `free_energy_multi` and `free_energy_components`: continuum part for
+  all phases of a mode at once (equal to the 0.12.1 loop to 1e-13 in
+  the tests, bit-identical on the development machine). Ti/Al/Au, 41
+  phases: 1.25 s -> 0.49 to 0.54 s (2.3 to 2.6 times);
+  `JunctionModel.calibrate` end to end: 1.73 to 1.82 s -> 0.70 to
+  0.74 s (2.4 to 2.5 times).
+- The full test suite: 160 tests in 87 s (0.12.1) -> 200 tests in
+  53 s.
+
+### Tutorials
+
+- `examples/tutorial_detector_budget.py`: Ic(T) curve and heating
+  curve -> fitted junction and cooling law -> thermal time, phonon NEP
+  and energy resolution with the error bars of both fits.
+- `examples/tutorial_readout_trace.py`: readout trace -> f and tauA
+  with error bars, Markov check, a second tauA from the spectrum, and
+  the implied temperature resolution.
+
+### Tests
+
+- New `tests/test_v013.py` (40 tests, about 15 s, 10 s of it the
+  readout tutorial). Fixes: against the exactly computed branch angle
+  and the first-order splitting, the closed-form short-junction slope
+  and cubic term (derived in the test), `ic_model` derivatives, the
+  closed form of independent spins and scale covariance; each fails on
+  0.12.1. Features: the Matsubara current against the closed form
+  (1e-9) and against `current_phase` at finite length (2e-3), the chi
+  function against its series; the cooling-law fit against noise-free
+  data, a Nelder-Mead search on an independently coded chi-square, the
+  closed-form one-parameter error bar, 150-fit Monte Carlo and
+  `SensorBudget.Gep`; propagation exact for linear and quadratic
+  functions. Speed-ups against the 0.12.1 code kept in the tests. Both
+  tutorials are run and their printed numbers checked.
+- 200 tests in total (160 in 0.12.1).
+
 ## 0.12.1 (2026-10-10)
 
 Citation corrections and packaging.

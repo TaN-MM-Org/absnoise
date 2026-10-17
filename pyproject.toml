@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "absnoise"
-version = "0.12.1"
+version = "0.13.0"
 description = "Andreev-bound-state occupation noise and detector budgets for proximity Josephson junctions"
 readme = "README.md"
 license = "Apache-2.0"
