@@ -88,12 +88,36 @@ class ShortJunction:
         return self.scale
 
     # ---- responsivities (numerical, include gap channel) ----------------
-    def dlnIc_dT(self, T, rel=2e-3):
-        dT = rel * self.Tc
+    def _log_slope_step(self, T, rel):
+        """Central-difference step for the d ln / dT methods (changed in
+        0.13.0). The step is rel * Tc, as before, but never more than
+        T/2 and (Tc - T)/10, so that T - dT stays positive and T + dT
+        stays below Tc. Up to 0.12.1 the step was always rel * Tc: below
+        T = rel * Tc (15 mK for MoRe with the default) T - dT was
+        negative and the result inf or NaN, and above Tc - rel * Tc
+        Ic(T + dT) = 0 gave -inf. Between 2 rel Tc and 0.98 Tc (for
+        rel = 2e-3) the step, and so the result, is unchanged."""
+        T = float(T)
+        if not (np.isfinite(T) and T > 0.0):
+            raise ValueError("temperature must be finite and positive (K)")
+        if not self.Delta(T) > 0.0:
+            raise ValueError(f"T = {T:.4g} K is at or above Tc = "
+                             f"{self.Tc:.4g} K: there is no supercurrent")
+        rel = float(rel)
+        if not (np.isfinite(rel) and rel > 0.0):
+            raise ValueError("rel must be finite and positive")
+        return T, min(rel * self.Tc, 0.5 * T, 0.1 * (self.Tc - T))
+
+    def dlnIc_dT(self, T: float, rel: float = 2e-3) -> float:
+        """d ln Ic / dT (1/K) by a central difference (step: see
+        `_log_slope_step`)."""
+        T, dT = self._log_slope_step(T, rel)
         return (np.log(self.Ic(T + dT)) - np.log(self.Ic(T - dT))) / (2 * dT)
 
-    def dlnI1_dT(self, T, rel=2e-3):
-        dT = rel * self.Tc
+    def dlnI1_dT(self, T: float, rel: float = 2e-3) -> float:
+        """d ln I'(0) / dT (1/K) by a central difference (step: see
+        `_log_slope_step`)."""
+        T, dT = self._log_slope_step(T, rel)
         return (np.log(self.dIdphi0(T + dT)) -
                 np.log(self.dIdphi0(T - dT))) / (2 * dT)
 

@@ -24,6 +24,12 @@ Junction current (bound states only, valid for L << xi; largest
 L/xi = 0.43 in the recipe set):
     I(phi,T) = (2e/hbar) * 2_valley * sum_modes dF_m/dphi,
     F_m(phi) = - sum_{E_i>0} 2 kB T ln[2 cosh(E_i / 2 kB T)]   (spin incl.)
+
+New in 0.13.0: the same free energy, bound states and continuum
+together, as a sum over Matsubara frequencies (Brouwer and Beenakker,
+Chaos, Solitons & Fractals 8, 1249 (1997), Eqs. (6) and (8)):
+`matsubara_free_energy_terms`, `JunctionModel.cpr_matsubara` and the
+exact Taylor coefficients `JunctionModel.cpr_series`.
 """
 
 import numpy as np
@@ -38,19 +44,59 @@ COS_TH_MIN = 0.05   # discard grazing modes (negligible current carriers)
 
 def _theta(E, c, Delta):
     """theta(E) = 2 arccos(E/Delta) - c E, monotonically decreasing."""
+    if isinstance(E, float):
+        # scalar path for the root finder (0.13.0): the same operations
+        # as below without the overhead of numpy.clip on a scalar, so
+        # the result is bit-identical
+        x = E / Delta
+        if x < 0.0:
+            x = 0.0
+        elif x > 1.0:
+            x = 1.0
+        return 2.0 * np.arccos(x) - c * E
     return 2.0 * np.arccos(np.clip(E / Delta, 0.0, 1.0)) - c * E
 
 
-def abs_energies(phi, tau, c, Delta):
+def _branch_angle(phi, tau):
+    """a = arccos(R), R = 1 - tau + tau cos(phi), in [0, pi].
+
+    Where R is within 1e-3 of +1 or -1 the direct arccos(R) loses
+    accuracy (R is rounded before arccos sees it: for tau = 0.7 every
+    |phi| below about 2e-8 gave a = 0 exactly). There the exact
+    identities arccos(1 - 2 s^2) = 2 arcsin(s), with
+    s^2 = tau sin^2(phi/2) = (1 - R)/2, and
+    pi - arccos(R) = 2 arcsin(sqrt(1 - s^2)), with
+    1 - s^2 = (1 - tau) + tau cos^2(phi/2), are used instead (new in
+    0.13.0; elsewhere the value is unchanged)."""
+    R = min(max(1.0 - tau + tau * np.cos(phi), -1.0), 1.0)
+    if 1.0 - abs(R) >= 1e-3:
+        return float(np.arccos(R))
+    if R > 0.0:
+        s = np.sqrt(tau) * abs(np.sin(0.5 * phi))
+        return float(2.0 * np.arcsin(min(s, 1.0)))
+    q = (1.0 - tau) + tau * np.cos(0.5 * phi) ** 2
+    return float(np.pi - 2.0 * np.arcsin(min(np.sqrt(max(q, 0.0)), 1.0)))
+
+
+def abs_energies(phi: float, tau: float, c: float,
+                 Delta: float) -> np.ndarray:
     """Positive ABS energies (J) for one channel.
 
     c = 2 L / (hbar v_x). Solve theta(E) = +- arccos(R) - 2 pi k with
     R = 1 - tau + tau cos(phi); theta decreases monotonically from pi
     (at E=0) to -c*Delta (at E=Delta), so each admissible target has a
     unique root.
+
+    A degenerate pair of levels is returned as two equal values (fixed
+    in 0.13.0). At phi = 0 (and, for tau = 1, at phi = pi) the two branches
+    +-arccos(R) give the same target, and the two levels of a doublet
+    coincide. Up to 0.12.1 such a pair was merged into one level, and,
+    because arccos(R) was taken of a rounded R, the same happened for
+    every |phi| below about 2e-8 / sqrt(tau): the free energy and the
+    occupation sums then lost one level of each doublet (C_A of
+    `FiniteLJunction` was halved at phi = 0).
     """
-    R = np.clip(1.0 - tau + tau * np.cos(phi), -1.0, 1.0)
-    a = np.arccos(R)                     # in [0, pi]
+    a = _branch_angle(phi, tau)          # arccos(R), in [0, pi]
     lo, hi = -c * Delta, np.pi
     targets = []
     k = 0
@@ -73,7 +119,7 @@ def abs_energies(phi, tau, c, Delta):
             roots.append(r0)
         except ValueError:
             pass
-    return np.array(sorted(set(roots)))
+    return np.array(sorted(roots))
 
 
 def continuum_phase_grid(n_E=3000, Emax_fac=60.0):
@@ -88,6 +134,18 @@ def continuum_delta(phi, tau, c, Delta, Efac):
     w = np.exp(-2.0 * gam) * np.exp(1j * c * E)
     R = np.clip(1.0 - tau + tau * np.cos(phi), -1.0, 1.0)
     D = 1.0 - 2.0 * w * R + w * w
+    return -np.angle(D)
+
+
+def _continuum_delta_rows(phis, tau, c, Delta, Efac):
+    """`continuum_delta` for many phases at once, shape (n_phi, n_E),
+    with the same arithmetic per element (new in 0.13.0)."""
+    E = Delta * Efac
+    gam = np.arccosh(Efac)
+    w = np.exp(-2.0 * gam) * np.exp(1j * c * E)
+    R = np.clip(1.0 - tau + tau * np.cos(np.asarray(phis, dtype=float)),
+                -1.0, 1.0)
+    D = 1.0 - (2.0 * w)[None, :] * R[:, None] + (w * w)[None, :]
     return -np.angle(D)
 
 
@@ -129,6 +187,97 @@ def continuum_free_energy(phi: float, tau: float, c: float, Delta: float,
     integral = (1.0 / np.pi) * trapezoid(
         np.tanh(E / (2.0 * KB * T)) * delta_ph, E)
     return boundary + integral
+
+
+def _chi2(z):
+    """Legendre chi function chi_2(z) = sum_{n>=0} z^(2n+1) / (2n+1)^2
+    = (Li2(z) - Li2(-z)) / 2 for 0 <= z <= 1 (Li2 from
+    scipy.special.spence: Li2(x) = spence(1 - x))."""
+    from scipy.special import spence
+    z = np.asarray(z, dtype=float)
+    return 0.5 * (spence(1.0 - z) - spence(1.0 + z))
+
+
+def _matsubara_terms(c, Delta, T, omega_max_fac):
+    """Matsubara frequencies and x_n = exp(-2 s_n - c w_n) (s_n =
+    arcsinh(w_n / Delta)) for one channel, together with the analytic
+    sum of the large-frequency form x_as = Delta^2 e^(-c w) / (4 w^2)
+    over all n >= 0."""
+    kT = KB * T
+    n_terms = int(np.ceil(omega_max_fac * Delta / (2.0 * np.pi * kT))) + 1
+    w = (2.0 * np.arange(n_terms) + 1.0) * np.pi * kT
+    y = w / Delta
+    e2s = 1.0 / (y + np.sqrt(1.0 + y * y)) ** 2          # exp(-2 s)
+    decay = np.exp(-c * w)
+    x = e2s * decay
+    x_as = decay / (4.0 * y * y)
+    sum_as = float(_chi2(np.exp(-c * np.pi * kT))) * \
+        (Delta / (2.0 * np.pi * kT)) ** 2
+    return x, x_as, sum_as
+
+
+def matsubara_free_energy_terms(phi, tau, c, Delta, T,
+                                omega_max_fac=2000.0):
+    """Phase derivative and Taylor coefficients of the free energy of
+    one channel (bound states and continuum together), from the
+    Matsubara-sum (Brouwer-Beenakker) form (new in 0.13.0).
+
+    With the secular function of this module continued to imaginary
+    energy E = i w_n, w_n = (2n + 1) pi kB T,
+
+        D(i w) = 1 + 2 R x + x^2,   x = exp(-2 s - c w),
+        s = arcsinh(w / Delta),     R = 1 - tau + tau cos(phi),
+
+    the phase-dependent free energy of one channel (spin included, the
+    normalization of `JunctionModel`) is
+    F(phi) = -2 kB T sum_{n>=0} ln D(i w_n) + const (P. W. Brouwer and
+    C. W. J. Beenakker, Chaos, Solitons & Fractals 8, 1249 (1997),
+    Eqs. (6) and (8)). D(i w) is real and positive, so the sum has no bound /
+    continuum split and no root finding. For c = 0 it reduces exactly
+    to -2 kB T ln 2cosh(E_A / 2 kB T) with
+    E_A = Delta sqrt(1 - tau sin^2(phi/2)) (asserted in the tests).
+
+    Returns dict(dF, F2, F4): dF = dF/dphi at each phi (J/rad, array
+    like phi), and the coefficients of F = F0 + F2 phi^2 + F4 phi^4 +
+    ..., F2 = 2 kB T sum kappa and F4 = -2 kB T sum (kappa/12 -
+    kappa^2/2) with kappa = tau x / (1 + x)^2.
+
+    The sums run to w = omega_max_fac * Delta; the large-w form
+    x_as = Delta^2 e^(-c w) / (4 w^2) is summed to infinity in closed
+    form (Legendre chi function), so the neglected rest falls as
+    (Delta / w_max)^3 (about 1e-10 relative for the default).
+    """
+    T = float(T)
+    if not (np.isfinite(T) and T > 0.0):
+        raise ValueError("T must be finite and positive (K)")
+    if not (np.isfinite(Delta) and Delta > 0.0):
+        raise ValueError("Delta must be finite and positive (J)")
+    if not (0.0 <= tau <= 1.0):
+        raise ValueError("tau must lie in [0, 1]")
+    if not (np.isfinite(c) and c >= 0.0):
+        raise ValueError("c = 2L/(hbar v_x) must be finite and >= 0")
+    x, x_as, sum_as = _matsubara_terms(c, Delta, T, omega_max_fac)
+    kT = KB * T
+    ph = np.atleast_1d(np.asarray(phi, dtype=float)).ravel()
+    R = 1.0 - tau + tau * np.cos(ph)
+    # sum x / (1 + 2 R x + x^2) = sum_as + sum (x/(...) - x_as), in
+    # blocks of phases so that memory stays bounded
+    g = np.empty(ph.size)
+    x2 = x * x
+    step = max(1, int(2 ** 20 // x.size))
+    for i in range(0, ph.size, step):
+        r = R[i:i + step, None]
+        g[i:i + step] = sum_as + np.sum(
+            x[None, :] / (1.0 + 2.0 * r * x[None, :] + x2[None, :])
+            - x_as[None, :], axis=1)
+    dF = 4.0 * kT * tau * np.sin(ph) * g
+    kap = tau * x / (1.0 + x) ** 2
+    s_kap = tau * sum_as + float(np.sum(kap - tau * x_as))
+    s_kap2 = float(np.sum(kap * kap))
+    F2 = 2.0 * kT * s_kap
+    F4 = -2.0 * kT * (s_kap / 12.0 - 0.5 * s_kap2)
+    dF = float(dF[0]) if np.ndim(phi) == 0 else dF
+    return dict(dF=dF, F2=F2, F4=F4)
 
 
 class JunctionModel:
@@ -184,18 +333,21 @@ class JunctionModel:
         xD = self.Delta / (2.0 * KB * T_list)
         l2cD = 2.0 * KB * T_list * (xD + np.log1p(np.exp(-2.0 * xD)))
 
+        # (changed in 0.13.0) the continuum part is evaluated for all
+        # phases of a mode at once; the arithmetic per element is the
+        # one of the per-phase loop of 0.12.1 (checked in the tests)
         for m in range(self.N):
-            for j, p in enumerate(self.phis):
+            for j in range(nP):
                 Eb = self._levels[m][j]
                 if len(Eb):
                     xb = Eb[None, :] / (2.0 * KB * T_list[:, None])
                     F[:, j] += -np.sum(2.0 * KB * T_list[:, None] *
                                        log2cosh(xb), axis=1)
-                dph = continuum_delta(p, self.tau, self.cs[m],
-                                      self.Delta, Efac)
-                F[:, j] += (l2cD * dph[0] / np.pi
-                            + trapezoid(tanhw * dph[None, :], E,
-                                        axis=1) / np.pi)
+            dph = _continuum_delta_rows(self.phis, self.tau, self.cs[m],
+                                        self.Delta, Efac)
+            F += (l2cD[:, None] * dph[None, :, 0] / np.pi
+                  + trapezoid(tanhw[:, None, :] * dph[None, :, :], E,
+                              axis=-1) / np.pi)
         return F
 
     def free_energy(self, T):
@@ -216,16 +368,77 @@ class JunctionModel:
     def Ic(self, T):
         return float(np.max(self.current_phase(T)))
 
-    def dIdphi0(self, T, k=8):
-        """dI/dphi at phi=0 (A/rad); Josephson inductance
-        L_J = Phi0/(2 pi I'(0)) at zero phase bias."""
-        I = self.current_phase(T)
-        p = np.polyfit(self.phis[:k], I[:k], 3)
-        return float(np.polyval(np.polyder(p), 0.0))
+    def cpr_matsubara(self, T, phis=None, omega_max_fac=2000.0):
+        """Current-phase relation I(phi) (A) from the Matsubara-sum
+        free energy (new in 0.13.0): bound states and continuum
+        together, exact for this model up to the truncation stated in
+        `matsubara_free_energy_terms` (about 1e-10 relative). Uses
+        `self.Delta` and the calibration `self.scale`, like
+        `current_phase`; phis defaults to `self.phis`.
+
+        Unlike `current_phase` (bound levels plus scattering-phase
+        continuum on an energy grid, differentiated on the phase
+        grid), it needs no level solving and no finite differences, so
+        it stays accurate near phi = 0, where bound levels leave for
+        the continuum and the two parts of `current_phase` nearly
+        cancel."""
+        ph = self.phis if phis is None else np.asarray(phis, dtype=float)
+        dF = np.zeros(np.size(ph))
+        for c in self.cs:
+            dF += matsubara_free_energy_terms(
+                np.ravel(ph), self.tau, c, self.Delta, T,
+                omega_max_fac)["dF"]
+        out = self.scale * (2.0 * E_CHARGE / HBAR) * 2.0 * dF
+        return float(out[0]) if np.ndim(ph) == 0 else out.reshape(
+            np.shape(ph))
+
+    def cpr_series(self, T, omega_max_fac=2000.0):
+        """Exact Taylor coefficients (a1, a3) of I(phi) = a1 phi +
+        a3 phi^3 + ... at phi = 0 (A/rad, A/rad^3), from the
+        Matsubara-sum free energy (new in 0.13.0). a1 = I'(0) gives
+        the Josephson inductance L_J = (hbar/2e) / a1 and a3 the Kerr
+        (phase-cubic) term. With F = F0 + F2 phi^2 + F4 phi^4 per
+        channel, I = scale (4e/hbar) sum_channels dF/dphi, so
+        a1 = scale (4e/hbar) sum 2 F2 and a3 = scale (4e/hbar)
+        sum 4 F4. Uses `self.Delta` and `self.scale`."""
+        F2 = F4 = 0.0
+        for c in self.cs:
+            t = matsubara_free_energy_terms(0.0, self.tau, c, self.Delta,
+                                            T, omega_max_fac)
+            F2 += t["F2"]
+            F4 += t["F4"]
+        k = self.scale * (2.0 * E_CHARGE / HBAR) * 2.0
+        return float(k * 2.0 * F2), float(k * 4.0 * F4)
+
+    def dIdphi0(self, T, k=None):
+        """dI/dphi at phi = 0 (A/rad); Josephson inductance
+        L_J = (hbar/2e) / I'(0) at zero phase bias.
+
+        Changed in 0.13.0: the exact value from the Matsubara-sum free
+        energy (`cpr_series`). Up to 0.12.1 a cubic was fitted to the
+        first k = 8 points of `current_phase`, whose first point is a
+        one-sided difference about 14 times too large and whose next
+        points scatter by up to 17 % where bound levels leave for the
+        continuum; the result was 44 % low for a zero-length junction
+        (where the exact value is known in closed form) and 57 % low
+        for Ti/Al/Au at 0.3 Tc. `k` is ignored and deprecated."""
+        if k is not None:
+            import warnings
+            warnings.warn("JunctionModel.dIdphi0(k=...) is ignored since "
+                          "0.13.0 (the slope is exact) and will be "
+                          "removed", DeprecationWarning, stacklevel=2)
+        return self.cpr_series(T)[0]
 
     def cpr_coeffs(self, T, kfit=30):
-        """Fit I(phi) ~ a1 phi + a3 phi^3 near phi=0; returns (a1, a3)
-        for inductance and Kerr calculations."""
+        """Fit I(phi) ~ a1 phi + a3 phi^3 to the first kfit points of
+        `current_phase`; returns (a1, a3).
+
+        This is a two-term least-squares fit over phi up to about
+        0.76 rad (kfit = 30, n_phi = 121), so it carries the bias of
+        the neglected phi^5 term (about 2 % in a3 for a zero-length
+        junction) and the scatter of `current_phase` near phi = 0. For
+        the exact coefficients use `cpr_series` (new in 0.13.0), which
+        `junction_properties` uses since 0.13.0."""
         I = self.current_phase(T)
         ph = self.phis[:kfit]
         A = np.vstack([ph, ph**3]).T
@@ -372,13 +585,23 @@ def gap_bcs(T, Tc: float, Delta0: float):
     return float(out[0]) if scalar else out
 
 
-def junction_properties(recipe, T_grid, n_phi=121, verbose=False):
+def junction_properties(recipe: Recipe, T_grid, n_phi: int = 121,
+                        verbose: bool = False) -> dict:
     """Temperature table of junction observables for one recipe.
 
     Includes the BCS suppression of the proximity gap Delta*(T).
     Returns dict with Ic (A), dIdphi0 (A/rad), a3 (A/rad^3), and the
     calibration scale (fixed at 20 mK).
+
+    Changed in 0.13.0: dIdphi0 and a3 are the exact Taylor
+    coefficients of the current-phase relation at phi = 0
+    (`JunctionModel.cpr_series`, Matsubara-sum free energy). Up to
+    0.12.1 they came from `cpr_coeffs`, a two-term fit over
+    0 < phi < 0.76 rad of a current that scatters near phi = 0: for
+    Ti/Al/Au at 0.3 Tc a3 was 6 % too large in magnitude (a1 within
+    5e-4). Ic is unchanged.
     """
+    T_grid = np.asarray(T_grid, dtype=float)
     base = JunctionModel(recipe, n_phi=n_phi)
     # calibration at 20 mK with Delta*(20 mK) ~ Delta0
     base.calibrate(0.02)
@@ -393,7 +616,7 @@ def junction_properties(recipe, T_grid, n_phi=121, verbose=False):
         if m.Delta <= 1e-4 * recipe.Delta:
             continue
         Ic[i] = m.Ic(T)
-        c1, c3 = m.cpr_coeffs(T)
+        c1, c3 = m.cpr_series(T)
         dI0[i] = c1
         a3[i] = c3
         if verbose:
@@ -421,19 +644,22 @@ def free_energy_components(model, T, n_E=3000):
     xD = model.Delta / (2.0 * KB * T)
     l2cD = 2.0 * KB * T * (xD + np.log1p(np.exp(-2.0 * xD)))
     for m in range(model.N):
-        for j, p in enumerate(model.phis):
+        for j in range(len(model.phis)):
             Eb = model._levels[m][j]
             if len(Eb):
                 Fb[j] += -np.sum(2.0 * KB * T *
                                  log2cosh(Eb / (2.0 * KB * T)))
-            dph = continuum_delta(p, model.tau, model.cs[m],
-                                  model.Delta, Efac)
-            Fc[j] += (l2cD * dph[0] / np.pi
-                      + trapezoid(tanhw * dph, E) / np.pi)
+        # all phases of a mode at once (0.13.0; same arithmetic per
+        # element as the per-phase loop of 0.12.1)
+        dph = _continuum_delta_rows(model.phis, model.tau, model.cs[m],
+                                    model.Delta, Efac)
+        Fc += (l2cD * dph[:, 0] / np.pi
+               + trapezoid(tanhw[None, :] * dph, E, axis=-1) / np.pi)
     return Fb, Fc
 
 
-def continuum_share(recipe, T, n_phi=81, phi0=np.pi / 2):
+def continuum_share(recipe: Recipe, T: float, n_phi: int = 81,
+                    phi0: float = np.pi / 2) -> dict:
     """Fraction of the supercurrent I(phi0) and of its temperature
     derivative carried by the continuum (E > Delta*) part of the free
     energy, at phi0 = pi/2 where the decomposition is regular (at
@@ -441,7 +667,22 @@ def continuum_share(recipe, T, n_phi=81, phi0=np.pi / 2):
     individually diverge while their sum stays finite). This quantifies
     the error of the bound-state-only occupation sums at each recipe's
     finite L/xi; it vanishes identically in the short-junction limit.
-    Returns dict(share_I, share_dIdT)."""
+    Returns dict(share_I, share_dIdT).
+
+    Changed in 0.13.0: T must lie in (0, Tc), and the temperature step
+    of the derivative is 2e-3 Tc but at most T/2 and (Tc - T)/10. Up
+    to 0.12.1 the step was always 2e-3 Tc, so below T = 2e-3 Tc the
+    model was evaluated at a negative temperature (share_dIdT NaN).
+    Far below Tc dI/dT falls as exp(-Delta/kB T) and vanishes to
+    machine precision (below about 0.03 Tc for Ti/Al/Au); share_dIdT
+    is then 0/0 and is returned as NaN (0.12.1 raised
+    ZeroDivisionError, for example at 20 mK for Ti/Al/Au). Up to about
+    0.06 Tc dI/dT is still at the rounding level, so share_dIdT there
+    carries no information.
+    """
+    T = float(T)
+    if not (np.isfinite(T) and 0.0 < T < recipe.Tc):
+        raise ValueError("T must lie between 0 and the recipe's Tc (K)")
 
     def I_parts(TT):
         m = JunctionModel(recipe, n_phi=n_phi)
@@ -455,12 +696,13 @@ def continuum_share(recipe, T, n_phi=81, phi0=np.pi / 2):
             out.append(float(I[j]))
         return out
 
-    dT = 2e-3 * recipe.Tc
+    dT = min(2e-3 * recipe.Tc, 0.5 * T, 0.1 * (recipe.Tc - T))
     b0, c0 = I_parts(T)
     bp, cp = I_parts(T + dT)
     bm, cm = I_parts(T - dT)
     db, dc = (bp - bm) / (2 * dT), (cp - cm) / (2 * dT)
-    return dict(share_I=c0 / (b0 + c0), share_dIdT=dc / (db + dc))
+    share_dIdT = dc / (db + dc) if db + dc != 0.0 else float("nan")
+    return dict(share_I=c0 / (b0 + c0), share_dIdT=share_dIdT)
 
 
 def occupation_heat_capacities(recipe, T, phi0=np.pi / 2, n_phi=81,

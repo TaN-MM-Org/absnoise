@@ -48,27 +48,54 @@ def channel_generator(f, Gs, Gp):
     return W
 
 
-def sigma_spectrum(f, Gs, Gp, omegas):
+def sigma_spectrum(f: float, Gs: float, Gp: float, omegas):
     """Single-sided PSD S_sigma(omega) of sigma = 1 - n_up - n_dn, and
     (S0, var, tau_eff). Uses detailed-balance symmetrization for a
-    stable eigendecomposition."""
-    W = channel_generator(f, Gs, Gp)
-    pi = np.array([(1 - f) ** 2, f * (1 - f), f * (1 - f), f * f])
-    sig = np.array([1.0, 0.0, 0.0, -1.0])
-    d = np.sqrt(pi)
-    # detailed-balance symmetrization A = D^{-1/2} W D^{1/2}
-    Ws = (W * d[None, :]) / d[:, None]
-    assert np.max(np.abs(Ws - Ws.T)) < 1e-12 * max(Gs, Gp, 1.0)
-    Ws = 0.5 * (Ws + Ws.T)
+    stable eigendecomposition.
+
+    f in [0, 1]; Gs > 0 and Gp >= 0 finite rates (any unit; omega in
+    the same unit). Changed in 0.13.0: the symmetrized generator
+    D^(-1/2) W D^(1/2) (D = diag of the stationary law) is built from
+    its closed-form entries, e.g. Gs sqrt(f (1 - f)) and Gp f (1 - f),
+    instead of dividing by sqrt(pi); and the stationary mode is the
+    eigenvector along sqrt(pi) instead of every eigenvalue above
+    -1e-14. Up to 0.12.1 an occupation f below about 1e-162 (f^2
+    underflows) or f = 0 or 1 stopped with an AssertionError, and
+    rates below about 1e-14 in the chosen unit dropped every mode
+    (S0 = 0, tau_eff = 0 instead of 1/Gs). Other results agree with
+    0.12.1 to rounding (tested to 1e-12).
+    """
+    f, Gs, Gp = float(f), float(Gs), float(Gp)
+    if not (0.0 <= f <= 1.0):
+        raise ValueError("occupation f must lie in [0, 1]")
+    if not (np.isfinite(Gs) and Gs > 0.0 and np.isfinite(Gp)
+            and Gp >= 0.0):
+        raise ValueError("rates must be finite, Gs > 0 and Gp >= 0")
+    g = 1.0 - f
+    rf = np.sqrt(f * g)
+    d = np.array([g, rf, rf, f])            # sqrt of the stationary law
+    # sigma = 1 - n_up - n_dn takes the values (1, 0, 0, -1)
+    # detailed-balance symmetrization A = D^{-1/2} W D^{1/2}: the
+    # off-diagonal entries are sqrt(W[i, j] W[j, i])
+    s1, sp = Gs * rf, Gp * f * g
+    Ws = np.array([
+        [-(2.0 * Gs * f + Gp * f * f), s1, s1, sp],
+        [s1, -Gs, 0.0, s1],
+        [s1, 0.0, -Gs, s1],
+        [sp, s1, s1, -(2.0 * Gs * g + Gp * g * g)]])
     lam, U = np.linalg.eigh(Ws)             # lam <= 0
-    x = d * (sig - np.dot(sig, pi))         # weighted fluctuation vector
+    # weighted fluctuation vector d * (sig - <sig>), <sig> = 1 - 2f,
+    # with each entry written without cancellation
+    x = d * np.array([2.0 * f, f - g, f - g, -2.0 * g])
     w = (U.T @ x) ** 2                      # mode weights, sum = var
     var = float(np.sum(w))
-    S = np.zeros_like(np.asarray(omegas, dtype=float))
+    k0 = int(np.argmax(np.abs(U.T @ d)))    # the stationary mode
+    om = np.asarray(omegas, dtype=float)
+    S = np.zeros_like(om)
     S0 = 0.0
-    for wk, lk in zip(w, lam):
-        if lk < -1e-14:
-            S += 4.0 * wk * (-lk) / (lk ** 2 + np.asarray(omegas) ** 2)
+    for k, (wk, lk) in enumerate(zip(w, lam)):
+        if k != k0 and lk < 0.0:
+            S += 4.0 * wk * (-lk) / (lk ** 2 + om ** 2)
             S0 += 4.0 * wk / (-lk)
     tau_eff = S0 / (4.0 * var) if var > 0 else 0.0
     return S, float(S0), var, float(tau_eff)

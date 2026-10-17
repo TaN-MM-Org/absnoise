@@ -44,21 +44,40 @@ def flip_probabilities(f, tauA, dt):
     return f * s, (1.0 - f) * s
 
 
-def telegraph_traces(f, tauA, dt, n_steps, n_channels, rng):
+def telegraph_traces(f: float, tauA: float, dt: float, n_steps: int,
+                     n_channels: int, rng) -> np.ndarray:
     """Markov two-state occupations, shape (n_steps, n_channels),
     sampled exactly every dt (see the module docstring)."""
     p_up, p_dn = flip_probabilities(f, tauA, dt)
     n_steps, n_channels = int(n_steps), int(n_channels)
     if n_steps < 1 or n_channels < 1:
         raise ValueError("n_steps and n_channels must be >= 1")
-    n = (rng.random(n_channels) < f).astype(np.int8)
+    n = rng.random(n_channels) < f
     out = np.empty((n_steps, n_channels), dtype=np.int8)
-    for i in range(n_steps):
-        r = rng.random(n_channels)
-        flip_up = (n == 0) & (r < p_up)
-        flip_dn = (n == 1) & (r < p_dn)
-        n = n ^ (flip_up | flip_dn)
-        out[i] = n
+    # Vectorized in time (0.13.0), with the same random numbers and the
+    # same states as the step-by-step loop of 0.12.1 (asserted in the
+    # tests): with r the uniform number of a step, the next state is
+    # a = (r < p_up) from state 0 and b = (r >= p_dn) from state 1. If
+    # a == b the step sets the state to a whatever it was ("reset");
+    # if a and not b it flips the state; otherwise it keeps it. So the
+    # state is the value at the last reset XOR the parity of the flips
+    # since then, which cumulative sums give for a whole block at once.
+    block = max(1, (1 << 18) // n_channels)
+    cols = np.arange(n_channels)
+    for start in range(0, n_steps, block):
+        k = min(block, n_steps - start)
+        r = rng.random((k, n_channels))      # same stream as k draws
+        a = r < p_up
+        b = r >= p_dn
+        par = (np.cumsum(a & ~b, axis=0) & 1).astype(bool)
+        reset = a == b
+        last = np.maximum.accumulate(
+            np.where(reset, np.arange(k)[:, None], -1), axis=0)
+        seen = last >= 0
+        at_reset = (a ^ par)[np.where(seen, last, 0), cols[None, :]]
+        state = np.where(seen, at_reset, n[None, :]) ^ par
+        out[start:start + k] = state
+        n = state[-1]
     return out
 
 

@@ -42,8 +42,9 @@ from .icfit import IcFit, fit_ic_curve, ic_model
 from .psdfit import TelegraphPSDFit, fit_telegraph_psd, telegraph_psd_model
 from .data import (load_ic_csv, load_trace_csv, save_ic_csv,
                    save_trace_csv, validate_ic_data)
+from .thermalfit import EPCouplingFit, ep_temperature, fit_ep_coupling
 
-__version__ = "0.12.1"
+__version__ = "0.13.0"
 __all__ = [
     "Recipe", "RECIPES", "carrier_density", "fermi_energy", "dos_ef",
     "heat_capacity", "ep_power", "gth", "n_modes", "steady_temperature",
@@ -60,6 +61,7 @@ __all__ = [
     "TelegraphPSDFit", "fit_telegraph_psd", "telegraph_psd_model",
     "load_ic_csv", "save_ic_csv", "load_trace_csv", "save_trace_csv",
     "validate_ic_data",
+    "EPCouplingFit", "fit_ep_coupling", "ep_temperature",
     "matched_Tc", "matched_recipe", "click_template",
     "click_monte_carlo", "two_temperature_click", "total_energy",
     "HBAR", "KB", "E_CHARGE", "H_PLANCK", "PHI0", "EPS0", "V_F",

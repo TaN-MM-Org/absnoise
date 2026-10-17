@@ -227,7 +227,8 @@ class SensorBudget:
         integ = 4.0 * trapezoid(Y**2 / S_tot, f)
         return 1.0 / np.sqrt(integ)
 
-    def nep_spectrum(self, T, tauA, freqs, S_ro_y=0.0, which="L"):
+    def nep_spectrum(self, T: float, tauA: float, freqs,
+                     S_ro_y: float = 0.0, which: str = "L") -> dict:
         """Noise-equivalent power spectrum NEP(f), the bolometric
         figure of merit every detector paper quotes (new in v0.8).
 
@@ -263,6 +264,12 @@ class SensorBudget:
         f = np.asarray(freqs, dtype=float)
         if np.any(f < 0) or not np.all(np.isfinite(f)):
             raise ValueError("frequencies must be finite and >= 0")
+        # (fixed in 0.13.0) the readout floor is checked as in
+        # `energy_resolution`; up to 0.12.1 a negative S_ro_y gave a NaN
+        # readout channel and a total below the other two channels
+        S_ro_y = float(S_ro_y)
+        if not (np.isfinite(S_ro_y) and S_ro_y >= 0.0):
+            raise ValueError("S_ro_y must be finite and >= 0")
         c = self._chain(T, tauA, which)
         T, tauA, G, tth = c["T"], c["tauA"], c["G"], c["tth"]
         R, ST_A0 = c["R"], c["ST_A0"]
