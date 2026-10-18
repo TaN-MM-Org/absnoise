@@ -412,6 +412,54 @@ def _simulate_path(p_up, p_dn, n, rng):
     return out[:n]
 
 
+def _viterbi_batch(model, Y):
+    """`TelegraphHMM.viterbi` for several traces of equal length at once
+    (rows of Y), returning an int8 array of paths with the shape of Y
+    (new in 0.14.0, used by `markov_dwell_test`).
+
+    The recursion is the one of `viterbi`, step for step: the same
+    additions of the same float64 numbers, the same strict comparisons
+    (ties go to state 0) and the same back-tracking, applied to a
+    vector of traces instead of one Python float per trace. Additions
+    and comparisons of IEEE doubles give the same result in NumPy and
+    in Python, so the paths are identical (asserted in the tests)."""
+    Y = np.asarray(Y, dtype=float)
+    B, T = Y.shape
+    sg = model.sigma
+    const = np.log(np.sqrt(2 * np.pi) * sg)
+    z0 = (Y - model.means[0]) / sg
+    z1 = (Y - model.means[1]) / sg
+    lb0 = np.ascontiguousarray((-0.5 * z0 ** 2 - const).T)     # (T, B)
+    lb1 = np.ascontiguousarray((-0.5 * z1 ** 2 - const).T)
+    del z0, z1
+    la = np.log(model._transition())
+    l00, l01, l10, l11 = (float(la[0, 0]), float(la[0, 1]),
+                          float(la[1, 0]), float(la[1, 1]))
+    ls = np.log(model._stationary())
+    d0 = float(ls[0]) + lb0[0]
+    d1 = float(ls[1]) + lb1[0]
+    back0 = np.zeros((T, B), dtype=bool)
+    back1 = np.zeros((T, B), dtype=bool)
+    for t in range(1, T):
+        c00 = l00 + d0
+        c01 = l01 + d1
+        c10 = l10 + d0
+        c11 = l11 + d1
+        b0 = c01 > c00
+        b1 = c11 > c10
+        back0[t] = b0
+        back1[t] = b1
+        d0 = lb0[t] + np.where(b0, c01, c00)
+        d1 = lb1[t] + np.where(b1, c11, c10)
+    path = np.empty((T, B), dtype=np.int8)
+    state = d1 > d0
+    path[-1] = state
+    for t in range(T - 1, 0, -1):
+        state = np.where(state, back1[t], back0[t])
+        path[t - 1] = state
+    return np.ascontiguousarray(path.T)
+
+
 def markov_dwell_test(y, model: TelegraphHMM, n_boot: int = 200,
                       seed: int = 0, min_dwells: int = 30) -> dict:
     """Do the dwells in a decoded trace follow the single-rate
@@ -486,12 +534,23 @@ def markov_dwell_test(y, model: TelegraphHMM, n_boot: int = 200,
                 "stays; sample faster than the occupation flips")
     rng = np.random.default_rng(seed)
     boot = {0: [], 1: []}
-    for _ in range(n_boot):
-        path = _simulate_path(model.p_up, model.p_dn, y.size, rng)
-        yb = model.means[path] + model.sigma * rng.standard_normal(y.size)
-        _, db = stats(model.viterbi(yb))
-        for s in (0, 1):
-            boot[s].append(db[s])
+    # (changed in 0.14.0) the simulated traces are drawn in the same
+    # order from the same stream as before and decoded in batches by
+    # `_viterbi_batch`, which returns the same paths as `viterbi`
+    chunk = max(1, min(n_boot, (1 << 22) // y.size))
+    done = 0
+    while done < n_boot:
+        k = min(chunk, n_boot - done)
+        Yb = np.empty((k, y.size))
+        for i in range(k):
+            path = _simulate_path(model.p_up, model.p_dn, y.size, rng)
+            Yb[i] = model.means[path] \
+                + model.sigma * rng.standard_normal(y.size)
+        for row in _viterbi_batch(model, Yb):
+            _, db = stats(row)
+            for s in (0, 1):
+                boot[s].append(db[s])
+        done += k
     p_state = {}
     for s in (0, 1):
         b = np.asarray(boot[s])

@@ -86,6 +86,12 @@ class TelegraphPSDFit:
         psi'(n_avg), the trigamma function; about 1/n_avg for large
         n_avg).
     model : the fitted model evaluated at the data frequencies.
+    cov : covariance of the fitted parameters (new in 0.14.0), in the
+        order S0, tau_s[, floor] and in their own units: the
+        linearized covariance of the log-space fit, J_log^-1 scaled by
+        the values, so sqrt(diag(cov)) equals `sigma`. It carries the
+        correlations (tau and the floor are usually correlated) that
+        `sigma` alone leaves out.
     """
 
     S0: float
@@ -96,6 +102,7 @@ class TelegraphPSDFit:
     chi2: float | None
     chi2_dof: int | None
     model: np.ndarray
+    cov: np.ndarray | None = None
 
 
 def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDFit:
@@ -206,7 +213,9 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
     names = ["S0", "tau_s"] + (["floor"] if fit_floor else [])
     vals = [S0, tau, fl][:len(names)]
     sigma = {nm: float(sv * v) for nm, sv, v in zip(names, s_log, vals)}
+    vv = np.asarray(vals, dtype=float)
     return TelegraphPSDFit(
         S0=float(S0), tau_s=float(tau), floor=float(fl), sigma=sigma,
         variance=float(S0 / (4.0 * tau)), chi2=chi2, chi2_dof=chi2_dof,
-        model=telegraph_psd_model(f, S0, tau, fl))
+        model=telegraph_psd_model(f, S0, tau, fl),
+        cov=cov_log * np.outer(vv, vv))

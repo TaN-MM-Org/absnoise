@@ -20,16 +20,22 @@ Analytic limits (testbench anchors):
   * tau = 1, L = 0, T = 0: I = (e Delta/hbar) sin(phi/2) per
     spin-degenerate channel  =>  e Ic Rn = pi Delta.
 
-Junction current (bound states only, valid for L << xi; largest
-L/xi = 0.43 in the recipe set):
+Junction current (largest L/xi = 0.43 in the recipe set):
     I(phi,T) = (2e/hbar) * 2_valley * sum_modes dF_m/dphi,
     F_m(phi) = - sum_{E_i>0} 2 kB T ln[2 cosh(E_i / 2 kB T)]   (spin incl.)
+               + F_cont,m(phi),
+the bound-state term plus the continuum term of `continuum_free_energy`
+(`JunctionModel.free_energy_multi`; this docstring said "bound states
+only" up to 0.13.0, although the code has included the continuum
+since 0.1.0).
 
 New in 0.13.0: the same free energy, bound states and continuum
 together, as a sum over Matsubara frequencies (Brouwer and Beenakker,
 Chaos, Solitons & Fractals 8, 1249 (1997), Eqs. (6) and (8)):
 `matsubara_free_energy_terms`, `JunctionModel.cpr_matsubara` and the
-exact Taylor coefficients `JunctionModel.cpr_series`.
+exact Taylor coefficients `JunctionModel.cpr_series`. New in 0.14.0:
+the exact critical current `JunctionModel.Ic_matsubara`, and
+`calibrate(method="matsubara")`.
 """
 
 import numpy as np
@@ -216,6 +222,25 @@ def _matsubara_terms(c, Delta, T, omega_max_fac):
     return x, x_as, sum_as
 
 
+def _matsubara_dF(ph, tau, kT, x, x_as, sum_as):
+    """dF/dphi of one channel at the phases ph (1-D array) from the
+    Matsubara terms of `_matsubara_terms` (the summation of
+    `matsubara_free_energy_terms`, moved here unchanged in 0.14.0 so
+    that `JunctionModel.Ic_matsubara` can reuse the terms)."""
+    R = 1.0 - tau + tau * np.cos(ph)
+    # sum x / (1 + 2 R x + x^2) = sum_as + sum (x/(...) - x_as), in
+    # blocks of phases so that memory stays bounded
+    g = np.empty(ph.size)
+    x2 = x * x
+    step = max(1, int(2 ** 20 // x.size))
+    for i in range(0, ph.size, step):
+        r = R[i:i + step, None]
+        g[i:i + step] = sum_as + np.sum(
+            x[None, :] / (1.0 + 2.0 * r * x[None, :] + x2[None, :])
+            - x_as[None, :], axis=1)
+    return 4.0 * kT * tau * np.sin(ph) * g
+
+
 def matsubara_free_energy_terms(phi, tau, c, Delta, T,
                                 omega_max_fac=2000.0):
     """Phase derivative and Taylor coefficients of the free energy of
@@ -259,18 +284,7 @@ def matsubara_free_energy_terms(phi, tau, c, Delta, T,
     x, x_as, sum_as = _matsubara_terms(c, Delta, T, omega_max_fac)
     kT = KB * T
     ph = np.atleast_1d(np.asarray(phi, dtype=float)).ravel()
-    R = 1.0 - tau + tau * np.cos(ph)
-    # sum x / (1 + 2 R x + x^2) = sum_as + sum (x/(...) - x_as), in
-    # blocks of phases so that memory stays bounded
-    g = np.empty(ph.size)
-    x2 = x * x
-    step = max(1, int(2 ** 20 // x.size))
-    for i in range(0, ph.size, step):
-        r = R[i:i + step, None]
-        g[i:i + step] = sum_as + np.sum(
-            x[None, :] / (1.0 + 2.0 * r * x[None, :] + x2[None, :])
-            - x_as[None, :], axis=1)
-    dF = 4.0 * kT * tau * np.sin(ph) * g
+    dF = _matsubara_dF(ph, tau, kT, x, x_as, sum_as)
     kap = tau * x / (1.0 + x) ** 2
     s_kap = tau * sum_as + float(np.sum(kap - tau * x_as))
     s_kap2 = float(np.sum(kap * kap))
@@ -445,9 +459,88 @@ class JunctionModel:
         coef, *_ = np.linalg.lstsq(A, I[:kfit], rcond=None)
         return float(coef[0]), float(coef[1])
 
-    def calibrate(self, T0=0.02):
+    def Ic_matsubara(self, T: float, n_grid: int = 31,
+                     xtol: float = 1e-9, omega_max_fac: float = 2000.0,
+                     return_phase: bool = False):
+        """Critical current (A) of the full model from the Matsubara-sum
+        current-phase relation (new in 0.14.0): bound states and
+        continuum together, without the energy and phase grids of
+        `Ic`. At 20 mK (gap Delta0, scale 1) `Ic` is 4.2e-4 to 1.8e-3
+        below this value for four of the shipped recipes, 1.5e-4 above
+        it for Ti/Nb/NbN, and 1.7 % above it for MoRe, whose
+        level-path current scatters by up to 3 % between neighboring
+        grid phases near its maximum.
+
+        The current is evaluated on n_grid phases inside (0, pi); every
+        local maximum of that grid is refined by a bounded Brent search
+        (scipy.optimize.minimize_scalar) over its two neighboring
+        intervals, to a phase tolerance xtol (rad), and the largest is
+        returned. An error delta in the phase changes the maximum by
+        only about |I''| delta^2 / 2 (I'' is of the order of I). Uses `self.Delta` and `self.scale`,
+        like `cpr_matsubara`. With return_phase=True, returns
+        (Ic, phi_c)."""
+        from scipy.optimize import minimize_scalar
+        T = float(T)
+        if not (np.isfinite(T) and T > 0.0):
+            raise ValueError("T must be finite and positive (K)")
+        if not (np.isfinite(self.Delta) and self.Delta > 0.0):
+            raise ValueError("self.Delta must be finite and positive: "
+                             "there is no supercurrent without a gap")
+        n_grid = int(n_grid)
+        if n_grid < 5:
+            raise ValueError("n_grid must be at least 5")
+        xtol = float(xtol)
+        if not (np.isfinite(xtol) and 0.0 < xtol < 0.1):
+            raise ValueError("xtol must lie in (0, 0.1) rad")
+        kT = KB * T
+        terms = [_matsubara_terms(c, self.Delta, T, omega_max_fac)
+                 for c in self.cs]
+        k = self.scale * (2.0 * E_CHARGE / HBAR) * 2.0
+
+        def current(ph):
+            ph = np.atleast_1d(np.asarray(ph, dtype=float))
+            dF = np.zeros(ph.size)
+            for x, x_as, sum_as in terms:
+                dF += _matsubara_dF(ph, self.tau, kT, x, x_as, sum_as)
+            return k * dF
+
+        edges = np.linspace(0.0, np.pi, n_grid + 2)
+        grid = edges[1:-1]
+        Ig = current(grid)
+        best_I, best_phi = -np.inf, float("nan")
+        for j in range(n_grid):
+            left = Ig[j - 1] if j > 0 else -np.inf
+            right = Ig[j + 1] if j < n_grid - 1 else -np.inf
+            if not (Ig[j] >= left and Ig[j] >= right):
+                continue
+            res = minimize_scalar(lambda p: -float(current(p)[0]),
+                                  bounds=(edges[j], edges[j + 2]),
+                                  method="bounded",
+                                  options=dict(xatol=xtol))
+            cand = [(-float(res.fun), float(res.x)), (float(Ig[j]),
+                                                     float(grid[j]))]
+            for Iv, pv in cand:
+                if Iv > best_I:
+                    best_I, best_phi = Iv, pv
+        return (best_I, best_phi) if return_phase else best_I
+
+    def calibrate(self, T0: float = 0.02, method: str = "levels") -> float:
+        """Set `scale` so that the critical current at T0 equals the
+        measured `recipe.Ic20`; returns the scale.
+
+        method="levels" (the default, unchanged) uses `Ic`, the maximum
+        of `current_phase` on the phase grid. method="matsubara" (new in
+        0.14.0) uses `Ic_matsubara`, the exact maximum of the
+        Matsubara-sum current; the scales differ by the grid error of
+        `Ic` (4.2e-4 to 1.8e-3 for five shipped recipes, 1.7 % for
+        MoRe; see `Ic_matsubara`). The gap is
+        `self.Delta` (by default the zero-temperature gap of the
+        recipe, the convention of `junction_properties`)."""
+        if method not in ("levels", "matsubara"):
+            raise ValueError("method must be 'levels' or 'matsubara'")
         self.scale = 1.0
-        self.scale = self.recipe.Ic20 / self.Ic(T0)
+        Ic = self.Ic(T0) if method == "levels" else self.Ic_matsubara(T0)
+        self.scale = self.recipe.Ic20 / Ic
         return self.scale
 
 
@@ -586,7 +679,8 @@ def gap_bcs(T, Tc: float, Delta0: float):
 
 
 def junction_properties(recipe: Recipe, T_grid, n_phi: int = 121,
-                        verbose: bool = False) -> dict:
+                        verbose: bool = False,
+                        method: str = "levels") -> dict:
     """Temperature table of junction observables for one recipe.
 
     Includes the BCS suppression of the proximity gap Delta*(T).
@@ -600,11 +694,20 @@ def junction_properties(recipe: Recipe, T_grid, n_phi: int = 121,
     0 < phi < 0.76 rad of a current that scatters near phi = 0: for
     Ti/Al/Au at 0.3 Tc a3 was 6 % too large in magnitude (a1 within
     5e-4). Ic is unchanged.
+
+    method="levels" (default) takes Ic and the calibration from the
+    level-plus-continuum `current_phase` on its phase grid, as before.
+    method="matsubara" (new in 0.14.0) takes both from
+    `JunctionModel.Ic_matsubara`, the exact maximum of the
+    Matsubara-sum current, so that Ic, dIdphi0 and a3 all come from the
+    same exact free energy (n_phi is then not used).
     """
+    if method not in ("levels", "matsubara"):
+        raise ValueError("method must be 'levels' or 'matsubara'")
     T_grid = np.asarray(T_grid, dtype=float)
     base = JunctionModel(recipe, n_phi=n_phi)
     # calibration at 20 mK with Delta*(20 mK) ~ Delta0
-    base.calibrate(0.02)
+    base.calibrate(0.02, method=method)
     scale = base.scale
     Ic = np.zeros_like(T_grid)
     dI0 = np.zeros_like(T_grid)
@@ -615,7 +718,7 @@ def junction_properties(recipe: Recipe, T_grid, n_phi: int = 121,
         m.scale = scale
         if m.Delta <= 1e-4 * recipe.Delta:
             continue
-        Ic[i] = m.Ic(T)
+        Ic[i] = m.Ic(T) if method == "levels" else m.Ic_matsubara(T)
         c1, c3 = m.cpr_series(T)
         dI0[i] = c1
         a3[i] = c3

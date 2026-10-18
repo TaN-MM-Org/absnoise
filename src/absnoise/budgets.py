@@ -16,6 +16,7 @@ resonator of inductance L_r (participation p = L_J/(L_J+L_r)):
 so the fractional-frequency noise PSD is
     S_y(f) = (p/2)^2 S_{I'}(f) / I'(0)^2 .
 """
+from __future__ import annotations
 
 import numpy as np
 
@@ -26,7 +27,52 @@ from .materials import (Recipe, carrier_density, heat_capacity, gth,
 from .shortjunction import ShortJunction
 
 
-def matched_filter_sigma(P, Q, W, tau_th, tauA):
+def _quartic_band_integral(a, b, c, X):
+    """I(X) = int_0^X dx / (a + b x^2 + c x^4) for a > 0, b, c >= 0
+    and 0 < X <= inf, in closed form (new in 0.14.0).
+
+    c = 0: arctan(X sqrt(b/a)) / sqrt(a b) (X / a if also b = 0).
+    c > 0: a + b x^2 + c x^4 = c (x^2 + p)(x^2 + q) with p + q = b/c
+    and p q = a/c (p, q real and positive, or complex conjugates), and
+    the partial fractions 1/((x^2+p)(x^2+q)) = (1/(x^2+p) - 1/(x^2+q))
+    / (q - p) give I = (F(p) - F(q)) / (c (q - p)) with
+    F(s) = arctan(X / sqrt(s)) / sqrt(s) (principal square root). When
+    |q - p| < 1e-5 |p + q| / 2 this difference quotient loses digits,
+    and its limit -F'(m) / c at m = (p + q)/2 is used, with
+    F'(s) = -arctan(X/sqrt(s)) / (2 s^(3/2)) - X / (2 s (s + X^2));
+    either way the relative error stays near 1e-11. X = inf gives the
+    closed form pi / (2 sqrt(a) sqrt(b + 2 sqrt(a c))) of
+    `matched_filter_sigma`."""
+    if np.isinf(X):
+        return np.pi / (2.0 * np.sqrt(a) * np.sqrt(b + 2.0 * np.sqrt(a * c)))
+    if c == 0.0:
+        if b == 0.0:
+            return X / a
+        return float(np.arctan(X * np.sqrt(b / a)) / np.sqrt(a * b))
+    disc = b * b - 4.0 * a * c
+    m = b / (2.0 * c)
+    if disc >= 0.0:
+        h = np.sqrt(disc) / c                   # q - p, real
+        q = m + 0.5 * h
+        p = (a / c) / q                         # no cancellation
+    else:
+        h = 1j * np.sqrt(-disc) / c
+        p, q = m - 0.5 * h, m + 0.5 * h
+    if abs(h) < 1e-5 * abs(m):
+        rs = np.sqrt(m)
+        dF = (-np.arctan(X / rs) / (2.0 * m * rs)
+              - X / (2.0 * m * (m + X * X)))
+        return float(-dF / c)
+
+    def F(s):
+        rs = np.sqrt(s)
+        return np.arctan(X / rs) / rs
+
+    return float(np.real((F(p) - F(q)) / (c * (q - p))))
+
+
+def matched_filter_sigma(P: float, Q: float, W: float, tau_th: float,
+                         tauA: float, f_max: float | None = None) -> float:
     """Exact matched-filter energy resolution (J) for the budget's
     noise model, in closed form (new in 0.11.0).
 
@@ -53,7 +99,23 @@ def matched_filter_sigma(P, Q, W, tau_th, tauA):
 
     The tests compare it with adaptive numerical quadrature of the
     same integrand and with the occupation-only closed form
-    sigma_E^2 = Q tau_th (P = W = 0).
+    sigma_E^2 = Q tau_th (P = W = 0). The integral is the frequency
+    form of the optimal-filter resolution of a thermal detector,
+    Delta E_rms = (int_0^inf 4 df / NEP^2(f))^(-1/2) (S. H. Moseley,
+    J. C. Mather and D. McCammon, J. Appl. Phys. 56, 1257 (1984); it is
+    Eq. (5) of their NASA TM 80092 preprint).
+
+    f_max (Hz, new in 0.14.0): a readout bandwidth. The filter then
+    uses only the frequencies 0 <= f <= f_max (an ideal low-pass
+    readout: nothing above f_max carries information), so
+
+        sigma_E^-2 = 4 int_0^f_max df / NEP^2 = (2/pi) I(2 pi f_max),
+
+    with I(X) = int_0^X dx / (a + b x^2 + c x^4) in closed form (see
+    `_quartic_band_integral`). sigma_E falls with f_max toward the
+    unlimited value (f_max = None). The tests compare it with adaptive
+    quadrature and with the low-bandwidth limit
+    sigma_E = sqrt(a / (4 f_max)).
     """
     P, Q, W = float(P), float(Q), float(W)
     tth, tA = float(tau_th), float(tauA)
@@ -64,6 +126,16 @@ def matched_filter_sigma(P, Q, W, tau_th, tauA):
     a = P + Q + W
     b = Q * tth ** 2 + W * (tth ** 2 + tA ** 2)
     c = W * tth ** 2 * tA ** 2
+    if f_max is not None:
+        f_max = float(f_max)
+        if not (np.isfinite(f_max) and f_max > 0.0):
+            raise ValueError("f_max must be finite and positive (Hz), "
+                             "or None for an unlimited bandwidth")
+        if not a > 0.0:
+            raise ValueError("the noise model has no noise at all: the "
+                             "resolution is not defined")
+        I = _quartic_band_integral(a, b, c, 2.0 * np.pi * f_max)
+        return float(np.sqrt(np.pi / (2.0 * I)))
     if not (a > 0.0 and b + 2.0 * np.sqrt(a * c) > 0.0):
         raise ValueError("the noise model has no occupation or readout "
                          "term: the matched-filter bandwidth, and so "
@@ -74,6 +146,13 @@ def matched_filter_sigma(P, Q, W, tau_th, tauA):
 class SensorBudget:
     def __init__(self, recipe: Recipe, sigma=2.0, delta=3, L_r=2e-9,
                  nu_r=6.0e9):
+        # (new in 0.14.0) refused: up to 0.13.0 a zero or negative value
+        # gave a ZeroDivisionError or NaN later, in the method called
+        for name, val in (("sigma", sigma), ("delta", delta),
+                          ("L_r", L_r), ("nu_r", nu_r)):
+            v = float(val)
+            if not (np.isfinite(v) and v > 0.0):
+                raise ValueError(f"{name} must be finite and positive")
         self.recipe = recipe
         self.sj = ShortJunction(recipe)
         self.sj.calibrate()
@@ -180,8 +259,10 @@ class SensorBudget:
         return dict(T=T, tauA=tauA, Ce=Ce, G=G, tth=Ce / G, s=s,
                     conv=conv, R=R, ST_A0=ST_A0)
 
-    def energy_resolution(self, T, tauA, S_ro_y=0.0, which="L",
-                          n_f=6000, method="exact"):
+    def energy_resolution(self, T: float, tauA: float, S_ro_y: float = 0.0,
+                          which: str = "L", n_f: int = 6000,
+                          method: str = "exact",
+                          f_max: float | None = None) -> float:
         """Matched-filter energy resolution (J) for a delta heat deposit.
 
         Signal chain: deposit E -> dTe(t) = (E/Ce) exp(-t/tau_th)
@@ -200,6 +281,11 @@ class SensorBudget:
         overestimates sigma_E, by 3.3 % for Ti/Al/Au at 0.3 Tc with
         tauA = 1 us and by 10.7 % with tauA = 1 ns (and more when
         phonon noise dominates).
+
+        f_max (Hz, new in 0.14.0; method="exact" only): the readout
+        bandwidth. The matched filter then uses only 0 <= f <= f_max
+        (see `matched_filter_sigma`), and the result is larger than the
+        unlimited one; `bandwidth_for_resolution` inverts this.
         """
         c = self._chain(T, tauA, which)
         S_ro_y = float(S_ro_y)
@@ -209,9 +295,12 @@ class SensorBudget:
         if method == "exact":
             return matched_filter_sigma(
                 4.0 * KB * T ** 2 * G, c["ST_A0"] * G ** 2,
-                S_ro_y * G ** 2 / c["R"] ** 2, tth, tauA)
+                S_ro_y * G ** 2 / c["R"] ** 2, tth, tauA, f_max=f_max)
         if method != "grid":
             raise ValueError("method must be 'exact' or 'grid'")
+        if f_max is not None:
+            raise ValueError("f_max applies to method='exact' only (the "
+                             "'grid' method has its own fixed band)")
         Ce, s, conv, R = c["Ce"], c["s"], c["conv"], c["R"]
         fmax = 10.0 / (2 * np.pi * min(tauA, tth))
         f = np.logspace(np.log10(1.0 / (200 * 2 * np.pi * max(tauA,
@@ -226,6 +315,52 @@ class SensorBudget:
         S_tot = S_A + S_ph + S_ro_y
         integ = 4.0 * trapezoid(Y**2 / S_tot, f)
         return 1.0 / np.sqrt(integ)
+
+    def bandwidth_for_resolution(self, T: float, tauA: float,
+                                 factor: float = 1.1,
+                                 S_ro_y: float = 0.0,
+                                 which: str = "L") -> float:
+        """Readout bandwidth (Hz) at which the matched-filter energy
+        resolution reaches `factor` times its unlimited value (new in
+        0.14.0): the smallest f_max with
+        energy_resolution(..., f_max=f_max) <= factor *
+        energy_resolution(...). The band-limited resolution falls
+        monotonically with f_max (the integrand 1/NEP^2 is positive), so
+        the root is unique; it is found by brentq in log f_max to a
+        relative tolerance of 1e-12. factor must exceed 1 (the unlimited
+        value itself needs an infinite bandwidth).
+
+        Without a readout floor the answer has a closed form, used in
+        the tests: f_max = sqrt(a / b) tan(pi / (2 factor^2)) / (2 pi)
+        in the notation of `matched_filter_sigma`."""
+        from scipy.optimize import brentq
+        factor = float(factor)
+        if not (np.isfinite(factor) and factor > 1.0):
+            raise ValueError("factor must be finite and > 1")
+        c = self._chain(T, tauA, which)
+        S_ro_y = float(S_ro_y)
+        if not (np.isfinite(S_ro_y) and S_ro_y >= 0.0):
+            raise ValueError("S_ro_y must be finite and >= 0")
+        G, tth = c["G"], c["tth"]
+        args = (4.0 * KB * c["T"] ** 2 * G, c["ST_A0"] * G ** 2,
+                S_ro_y * G ** 2 / c["R"] ** 2, tth, c["tauA"])
+        target = factor * matched_filter_sigma(*args)
+
+        def g(lf):
+            return np.log(matched_filter_sigma(*args, f_max=np.exp(lf))
+                          / target)
+
+        f_c = 1.0 / (2.0 * np.pi * min(tth, c["tauA"]))
+        lo, hi = np.log(f_c) - 5.0, np.log(f_c) + 5.0
+        for _ in range(60):
+            if g(lo) > 0.0:
+                break
+            lo -= 5.0
+        for _ in range(60):
+            if g(hi) < 0.0:
+                break
+            hi += 5.0
+        return float(np.exp(brentq(g, lo, hi, xtol=1e-13, rtol=1e-13)))
 
     def nep_spectrum(self, T: float, tauA: float, freqs,
                      S_ro_y: float = 0.0, which: str = "L") -> dict:
