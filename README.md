@@ -41,7 +41,8 @@ number that looks fine but is not.
 - [Install](#install)
 - [Units and conventions](#units-and-conventions)
 - [Examples](#examples) (each with the output it prints)
-- [Tutorials](#tutorials) (two end-to-end scripts in `examples/`)
+- [Tutorials](#tutorials) (three end-to-end scripts in `examples/`)
+- [What changed in 0.14.0](#what-changed-in-0140)
 - [What changed in 0.13.0](#what-changed-in-0130)
 - [What changed in 0.12.0](#what-changed-in-0120)
 - [What changed in 0.11.0](#what-changed-in-0110)
@@ -164,8 +165,8 @@ run `pip install -e .[test]`, then `pytest`.
 ## Examples
 
 Each example below runs as written, and the output shown is what it
-printed with absnoise 0.13.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
-Examples 1 to 10 print the same as with 0.12.0.
+printed with absnoise 0.14.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
+Examples 1 to 12 print the same as with 0.13.0.
 Values not taken from the shipped recipes -- correlation times,
 geometries, noise levels -- are illustrative, not measurements.
 
@@ -783,12 +784,90 @@ apart. The fit warns when every point stays within 10 % of the bath
 (in `Te^delta`), and refuses when the exponent runs to the end of its
 search range (1 to 8) or the parameters cannot be told apart.
 
+### 13. How much readout bandwidth does the energy resolution need?
+
+```python
+from absnoise import RECIPES, SensorBudget
+
+b = SensorBudget(RECIPES[1])                 # Ti/Al/Au
+T, tauA = 0.225, 1e-6                        # operating point (illustrative)
+S_ro = 5e-15                                 # white readout floor of y (1/Hz)
+
+ideal = b.energy_resolution(T, tauA, S_ro_y=S_ro)
+print(f"unlimited band: sigma_E = {ideal:.3e} J")
+for f_max in (1e5, 1e6, 1e7, 1e8):           # readout bandwidth (Hz)
+    s = b.energy_resolution(T, tauA, S_ro_y=S_ro, f_max=f_max)
+    print(f"f_max = {f_max:.0e} Hz: sigma_E = {s:.3e} J ({s / ideal:.3f} x)")
+for floor in (S_ro, 0.0):
+    f_bw = b.bandwidth_for_resolution(T, tauA, factor=1.1, S_ro_y=floor)
+    print(f"bandwidth for 1.1 x the unlimited value, floor {floor:.0e}: "
+          f"{f_bw / 1e6:.2f} MHz")
+```
+
+```
+unlimited band: sigma_E = 2.629e-21 J
+f_max = 1e+05 Hz: sigma_E = 1.010e-20 J (3.842 x)
+f_max = 1e+06 Hz: sigma_E = 3.639e-21 J (1.384 x)
+f_max = 1e+07 Hz: sigma_E = 2.705e-21 J (1.029 x)
+f_max = 1e+08 Hz: sigma_E = 2.633e-21 J (1.001 x)
+bandwidth for 1.1 x the unlimited value, floor 5e-15: 3.29 MHz
+bandwidth for 1.1 x the unlimited value, floor 0e+00: 732.60 MHz
+```
+
+`energy_resolution` assumes a matched filter that uses every
+frequency. A real readout passes only a band: the resonator
+linewidth, the amplifier or the digitizer. With `f_max` (new in
+0.14.0) the filter uses only the frequencies from 0 to `f_max`, as an
+ideal low-pass readout allows, and the integral
+`sigma_E^-2 = 4 int_0^f_max df / NEP^2` still has a closed form.
+`bandwidth_for_resolution` returns the bandwidth at which the
+resolution comes within a chosen factor of the unlimited value. A
+readout floor makes the highest frequencies worthless, so it lowers
+the bandwidth you need: 3.3 MHz here with the floor, against 733 MHz
+without it, where the thermal time of 0.78 ns sets the scale. The
+tests compare the closed form with numerical integration of the NEP
+of `nep_spectrum`.
+
+### 14. The exact critical current of the full model
+
+```python
+from absnoise import RECIPES, JunctionModel
+
+m = JunctionModel(RECIPES[1])                # Ti/Al/Au, full model, scale 1
+Ic_grid = m.Ic(0.02)                         # maximum on the phase grid
+Ic_exact, phi_c = m.Ic_matsubara(0.02, return_phase=True)
+print(f"Ic(20 mK), scale 1: phase grid {Ic_grid * 1e6:.5f} uA, "
+      f"exact {Ic_exact * 1e6:.5f} uA at phi = {phi_c:.4f} rad "
+      f"({(Ic_grid / Ic_exact - 1) * 1e4:.1f}e-4)")
+scale = m.calibrate(method="matsubara")      # exact Ic(20 mK) = measured Ic20
+print(f"scale {scale:.6f} (levels: {RECIPES[1].Ic20 / Ic_grid:.6f}), "
+      f"Ic(20 mK) = {m.Ic_matsubara(0.02) * 1e6:.4f} uA")
+```
+
+```
+Ic(20 mK), scale 1: phase grid 4.07482 uA, exact 4.07668 uA at phi = 1.9698 rad (-4.5e-4)
+scale 0.517578 (levels: 0.517814), Ic(20 mK) = 2.1100 uA
+```
+
+`JunctionModel.Ic` takes the largest value of `current_phase` on its
+phase grid, and `calibrate` scales the model so that this value at
+20 mK equals the measured `Ic20`. `Ic_matsubara` (new in 0.14.0)
+finds the maximum of the Matsubara-sum current instead (no energy or
+phase grid; see Example 11), and `calibrate(method="matsubara")` uses
+it. For Ti/Al/Au the two differ by 4.5e-4. For MoRe the level-based
+current scatters by up to 3 % between neighboring grid phases near its
+maximum, and its `Ic` lies 1.7 % above the exact maximum. The default
+stays `method="levels"`, so that every calibration of earlier releases
+is unchanged. `junction_properties(..., method="matsubara")` gives the
+whole table from the exact sum.
+
 ## Tutorials
 
-Two end-to-end scripts in the `examples/` folder go from synthetic
+Three end-to-end scripts in the `examples/` folder go from synthetic
 "measured" data (fixed seeds, illustrative true values) to a final
 result with error bars. Each prints a short summary; the test suite
-runs both and checks every printed number against the output below.
+runs all three and checks every printed number against the output
+below.
 
 **`examples/tutorial_detector_budget.py`** (a few seconds): an Ic(T)
 curve and a heating curve, fitted with `fit_ic_curve` and
@@ -826,6 +905,69 @@ spectrum: tauA = 0.974 +- 0.033 ms (chi2 = 1993 for 2045 dof)
 difference decoder - spectrum: 0.5 error bars
 Ti/Al/Au at 0.225 K: dT_A in 1 s = 1279.01 +- 20.03 uK for tauA = 0.998 ms
 ```
+
+**`examples/tutorial_readout_bandwidth.py`** (new in 0.14.0, a few
+seconds): how much readout bandwidth a junction calorimeter needs. A
+synthetic noise record of the resonator frequency (occupation noise of
+Ti/Al/Au at 0.3 `Tc` with `tauA` = 1 us, plus a white readout floor)
+is averaged into a spectrum of 32 segments and fitted with
+`fit_telegraph_psd(..., n_avg=32)`. The fit gives `tauA`, the floor
+and the plateau; the plateau is checked against the budget's own
+prediction. The energy resolution then follows for an unlimited band
+and for readout bandwidths of 1, 3 and 10 MHz, together with the
+bandwidth that brings it within 10 % of the unlimited value. The error
+bars come from the fit's covariance of `tauA` and the floor
+(`TelegraphPSDFit.cov`, new in 0.14.0), carried through along its
+principal axes.
+
+```
+spectrum fit: tauA = 1.023 +- 0.021 us, floor = 5.58e-15 +- 0.02e-15 1/Hz, chi2 = 2820 for 2946 dof
+plateau S0 = 1.747e-13 +- 0.056e-13 1/Hz, budget prediction 1.682e-13 (1.2 error bars apart)
+energy resolution, unlimited band: 2.751e-21 +- 0.043e-21 J
+readout bandwidth  1 MHz: 3.735e-21 +- 0.046e-21 J (1.36 times the unlimited value)
+readout bandwidth  3 MHz: 3.035e-21 +- 0.044e-21 J (1.10 times the unlimited value)
+readout bandwidth 10 MHz: 2.826e-21 +- 0.043e-21 J (1.03 times the unlimited value)
+bandwidth for 1.1 times the unlimited value: 3.08 +- 0.03 MHz
+```
+
+## What changed in 0.14.0
+
+New:
+
+- `energy_resolution(..., f_max=...)` and `matched_filter_sigma(...,
+  f_max=...)`: the matched-filter energy resolution for a readout of
+  finite bandwidth, in closed form; and
+  `SensorBudget.bandwidth_for_resolution`: the bandwidth that brings
+  it within a chosen factor of the unlimited value (Example 13).
+- `JunctionModel.Ic_matsubara`: the exact critical current of the full
+  finite-length model, from the Matsubara-sum current;
+  `calibrate(method="matsubara")` and
+  `junction_properties(..., method="matsubara")` use it (Example 14).
+  The default calibration is unchanged.
+- `TelegraphPSDFit.cov`: the covariance of the fitted spectrum
+  parameters, with their correlations.
+- A third tutorial, on the readout bandwidth (see [Tutorials](#tutorials)).
+
+Corrected (details and before/after numbers under
+[Corrections in earlier versions](#corrections-in-earlier-versions)):
+
+- `FiniteLJunction` within `1e-3` rad of zero phase (its finite
+  difference step), where the two levels of an Andreev doublet cross:
+  the inductance-readout sums were wrong by a factor of up to about
+  1000 (saturation ratio 853.79 instead of 1.00747 for Ti/Al(thick) at
+  `phi = 1e-4`).
+
+Also new: `FiniteLJunction` refuses an unknown `which` (it was taken as
+`"L"`) and a temperature at or above `Tc`; `SensorBudget` refuses a
+non-positive `sigma`, `delta`, `L_r` or `nu_r`. The source
+distribution now contains `examples/`, so the tutorial tests run from
+it too.
+
+Faster, with the same results: `markov_dwell_test` decodes its
+simulated traces in batches (identical paths, checked exactly; 2.8 to
+3.0 times faster for the 500 traces of Example 10). No function was
+renamed or removed, and Examples 1 to 12 print what they printed with
+0.13.0.
 
 ## What changed in 0.13.0
 
@@ -948,7 +1090,9 @@ The corrections, with before/after numbers, are listed under
   calibrated to the measured `Ic` at 20 mK. Since 0.13.0,
   `JunctionModel.cpr_series` (exact `I'(0)` and phase-cubic term) and
   `JunctionModel.cpr_matsubara` (the current-phase relation) evaluate
-  the same model as a sum over Matsubara frequencies.
+  the same model as a sum over Matsubara frequencies; since 0.14.0,
+  `JunctionModel.Ic_matsubara` gives its exact critical current, and
+  `calibrate` and `junction_properties` take `method="matsubara"`.
 - `continuum_share`, `occupation_heat_capacities` -- how much of the
   current, and of the occupation heat capacity, comes from the
   continuum.
@@ -988,11 +1132,14 @@ The corrections, with before/after numbers, are listed under
   `dT_phonon`, `freq_noise_spectrum`, `energy_resolution`,
   `energy_resolution_analytic_A`, `nep_spectrum`, plus `Ce`, `Gep`,
   `tau_th`, `LJ` and `participation` (the share of the resonator's
-  inductance that the junction supplies).
-- `matched_filter_sigma(P, Q, W, tau_th, tauA)` -- the closed-form
-  energy resolution behind `energy_resolution`, from the three noise
-  levels of `nep_spectrum` (phonon, occupation, readout) at zero
-  frequency.
+  inductance that the junction supplies). Since 0.14.0
+  `energy_resolution` takes a readout bandwidth `f_max`, and
+  `bandwidth_for_resolution` returns the bandwidth a target
+  resolution needs.
+- `matched_filter_sigma(P, Q, W, tau_th, tauA, f_max=None)` -- the
+  closed-form energy resolution behind `energy_resolution`, from the
+  three noise levels of `nep_spectrum` (phonon, occupation, readout)
+  at zero frequency, for an unlimited band or up to `f_max`.
 - `matched_Tc`, `matched_recipe` -- the matched-level design.
 - `click_template`, `click_monte_carlo` -- the response to one photon,
   noiseless and with noise.
@@ -1005,7 +1152,8 @@ The corrections, with before/after numbers, are listed under
   (with `to_recipe`, and `propagate` for error bars on anything
   computed from the fitted junction), and the model curve.
 - `fit_telegraph_psd`, `TelegraphPSDFit`, `telegraph_psd_model` -- the
-  noise-spectrum fit, its result, and the model spectrum.
+  noise-spectrum fit, its result (with the covariance `cov` since
+  0.14.0), and the model spectrum.
 - `fit_hmm`, `TelegraphHMM` -- the readout-trace decoder
   (`posterior`, `viterbi`, `forward_backward`, `rates`, `from_rates`,
   and `uncertainties`, `score`, `loglik` for error bars).
@@ -1113,10 +1261,23 @@ gives its inputs, units and conventions.
   temperature outside (0, `Tc`). `SensorBudget.nep_spectrum` refuses a
   negative or non-finite readout floor (0.13.0), as `energy_resolution`
   already did.
+- `energy_resolution` and `matched_filter_sigma` (0.14.0) get an
+  `f_max` that is not finite and positive, or an `f_max` with
+  `method="grid"`; `bandwidth_for_resolution` gets a `factor` that is
+  not finite or not above 1.
+- `JunctionModel.Ic_matsubara` (0.14.0) gets a temperature that is not
+  positive, a model without a gap, fewer than 5 grid phases or a phase
+  tolerance outside (0, 0.1); `calibrate` and `junction_properties` get
+  a `method` other than `"levels"` or `"matsubara"`.
+- `FiniteLJunction.andreev_sums` and `saturation_ratio` (0.14.0) get a
+  `which` other than `"I"` or `"L"` (it was taken as `"L"`) or a
+  temperature that is not positive or is at or above `Tc` (a NaN ratio
+  up to 0.13.0); `SensorBudget` gets a `sigma`, `delta`, `L_r` or
+  `nu_r` that is not finite and positive.
 
 ## How the results are checked
 
-200 automated tests run on every push and pull request, on Python 3.9,
+267 automated tests run on every push and pull request, on Python 3.9,
 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.9 with the
 oldest NumPy (1.24.0) and SciPy (1.10.0) the package allows. The
 numerical checks compare the package with an exact formula, a second
@@ -1175,6 +1336,24 @@ check that refusals fire. The main checks:
 - Free energy speed-up (0.13.0): `free_energy_multi` and
   `free_energy_components` equal the 0.12.1 phase-by-phase loop (kept
   in the tests) to 1e-13 relative.
+- Finite-length sums near zero phase (0.14.0): for `|phi|` below the
+  difference step of 1e-3 rad, the inductance-readout responsivity and
+  saturation ratio and the current-readout noise sum equal a
+  calculation from the analytic level slopes and curvatures (implicit
+  differentiation of the level condition along each branch, coded in
+  the test) to 1e-6, and `C_A` to 1e-12. The 0.13.0 ratio was more
+  than 10 times too large there. From `|phi| = 1e-3` on, the level data
+  are identical to those of 0.13.0.
+- Exact critical current (0.14.0): for zero length `Ic_matsubara`
+  equals the closed-form maximum of the short-junction current at
+  0.027 `Tc` to 1e-9 (its phase to 1e-6 rad), and the maximum over
+  200 001 phases at 0.5 `Tc` to 1e-9. At finite length it agrees with
+  the level-based `Ic` within 2e-3 and is never below the Matsubara
+  current on a 40-phase grid. After `calibrate(method="matsubara")` it
+  returns the measured `Ic20` (1e-12). In the `junction_properties`
+  table with that method, the slope and the cubic term differ from the
+  default only by the calibration scale (1e-12), and `Ic` is the
+  `Ic_matsubara` value (1e-12).
 
 **Occupation noise and the bound**
 
@@ -1248,6 +1427,18 @@ check that refusals fire. The main checks:
   above the closed form for `tauA` = 1 us and 1 ns.
 - Out-of-range temperatures, correlation times and averaging times
   are refused, and (0.13.0) a negative readout floor in `nep_spectrum`.
+- Readout bandwidth (0.14.0): the closed-form band integral equals
+  adaptive quadrature to 1e-10 for real, complex, equal and nearly
+  equal roots of the quartic, and without the quartic term. The
+  band-limited resolution equals quadrature of `4 / NEP^2` from
+  `nep_spectrum` to 1e-8, for both readouts with and without a floor,
+  and falls as the bandwidth grows; at 1 Hz it equals
+  `NEP(0) / sqrt(4 f_max)` (1e-12). The 0.10.x grid integral equals the
+  closed form over its own band (1e-6). Without a floor the bandwidth
+  for a factor `F` equals the closed form
+  `sqrt(a / b) tan(pi / (2 F^2)) / (2 pi)` (1e-9); with a floor the
+  resolution at the returned bandwidth is `F` times the unlimited value
+  (1e-10).
 - Log slopes (0.13.0): `ShortJunction.dlnIc_dT` at 0.99, 0.999 and
   0.9999 `Tc` equals a five-point derivative of `ic_model` (a separate
   implementation of Ic(T)) within 5e-3 (0.12.1: -inf above 0.998
@@ -1361,9 +1552,19 @@ check that refusals fire. The main checks:
   0.10.x could not start on) returns both levels to 1e-6 and the exact
   state sequence; the two-group split equals a brute-force search over
   all thresholds to 1e-12.
+- Spectrum-fit covariance (0.14.0): over 400 spectra with the exact
+  scatter of an average of four periodograms, the observed
+  correlations of `S0`, `tau` and the floor agree with `cov` within
+  0.12, and the observed scatter with its diagonal within 15 %;
+  `sqrt(diag(cov))` equals `sigma` (1e-12).
+- Dwell test speed-up (0.14.0): the batched decoder returns the same
+  paths as `viterbi` (compared exactly, also with a far outlier and
+  with exact ties), and `markov_dwell_test` the same p-values and
+  dispersions as the 0.13.0 loop (kept in the tests).
 - Files: Ic files round-trip exactly; trace files round-trip the
   samples exactly and `dt` within 1e-18 s.
-- Tutorials (0.13.0): both scripts in `examples/` run in the tests,
+- Tutorials (0.13.0, the third since 0.14.0): every script in
+  `examples/` runs in the tests,
   and every printed line matches the output given in the README and
   in the script, each number within two units of its last printed
   digit.
@@ -1383,7 +1584,29 @@ check that refusals fire. The main checks:
 
 ## Corrections in earlier versions
 
-**0.13.0 (this release) corrects six results of 0.12.1.** Each was
+**0.14.0 (this release) corrects one result of 0.13.0.** It was found
+by a test that fails on 0.13.0 and passes now (`tests/test_v014.py`).
+It does not change the output of Examples 1 to 12.
+
+- **Finite-length sums near zero phase.** `FiniteLJunction` takes the
+  slopes and curvatures of the levels by central differences with a
+  step of 1e-3 rad, and matched the levels at the three phases by
+  their order in energy. At `phi = 0` the two levels of an Andreev
+  doublet cross. For `|phi|` below the step, the stencil therefore
+  switched from one level to the other in the middle: the slope of a
+  doublet level came out as `-alpha phi / dphi` instead of `-alpha`,
+  and its curvature as about `-2 alpha / dphi` (`alpha` is the slope
+  of the doublet splitting). For Ti/Al(thick) at 0.3 `Tc` and
+  `phi = 1e-4`, `saturation_ratio(..., "L")` was 853.79 instead of
+  1.00747 (the value just outside the step). Each level is now followed
+  along its own branch there. `C_A` was not affected, and from
+  `|phi| = 1e-3` on nothing changed.
+
+Also: the module docstring of `absnoise.levels` said that the junction
+current counts bound states only; the code has included the continuum
+since 0.1.0, and the docstring now says so.
+
+**0.13.0 corrects six results of 0.12.1.** Each was
 found by a test that fails on 0.12.1 and passes now
 (`tests/test_v013.py`). None of them changes the output of Examples 1
 to 10.
@@ -1608,7 +1831,22 @@ No earlier release records a correction. The full history is in
   (zero-length test case). Its maximum lies inside the grid for the
   shipped recipes. These values are kept as they were, so that
   calibrations stay unchanged; use `cpr_matsubara` where these errors
-  matter.
+  matter. At 20 mK `Ic` lies 4.2e-4 to 1.8e-3 below the exact maximum
+  (`Ic_matsubara`) for four recipes and 1.5e-4 above it for Ti/Nb/NbN.
+  For MoRe (the largest `L/xi`, 0.43) the level-based current scatters
+  by up to 3 % between neighboring grid phases near its maximum, and
+  `Ic` lies 1.7 % above the exact maximum, so the default calibration
+  of MoRe carries that error; `calibrate(method="matsubara")` avoids
+  it.
+- The cost of `Ic_matsubara` grows as `1/T`. At 20 mK it took about
+  1.5 s for Ti/Al/Au (the level-based `Ic` about 4 s) and about 20 s
+  for MoRe (2.1e5 Matsubara terms for each of 159 modes; the
+  level-based `Ic` 3.4 s) on the development machine.
+- `FiniteLJunction` differentiates the levels with a phase step of
+  1e-3 rad. Near `phi = pi` for a fully transparent channel
+  (`tau = 1`, where a level touches zero energy) the levels have a
+  kink, and the derivatives there are not meaningful; none of the
+  shipped recipes has `tau = 1`.
 - `JunctionModel.cpr_coeffs` is a two-term fit over 0 to 0.76 rad and
   keeps the bias of the neglected higher terms (2 to 6 % in `a3`);
   `cpr_series` gives the exact coefficients.
@@ -1643,7 +1881,10 @@ No earlier release records a correction. The full history is in
   spectrum of a sampled trace also contains folded-back (aliased)
   noise near the highest frequency, which the fit does not model.
 - `SensorBudget.energy_resolution` assumes an ideal matched filter over
-  all frequencies; a real readout with a finite bandwidth does worse.
+  all frequencies, or (`f_max`, 0.14.0) over the frequencies up to
+  `f_max` with nothing above: an ideal low-pass readout. A real
+  readout attenuates gradually and may add noise of its own shape;
+  model that with `S_ro_y` only where its noise is white.
 - `gap_bcs` solves the gap equation with `Delta0 / (kB Tc) = 1.7639`,
   the BCS value `pi e^-gamma = 1.76388` rounded. Its solution would
   close at 1.000013 `Tc` instead of at `Tc`. `gap_bcs` returns 0 from
@@ -1682,7 +1923,11 @@ Six junction recipes ship with full provenance (Table I of W. Jung et
 al., Phys. Rev. Applied 26, 014078 (2026), arXiv:2503.06850);
 graphene electron-phonon cooling follows G.-H. Lee et al., Nature
 586, 42 (2020); physical constants are CODATA 2018. The phonon NEP is
-compared with J. C. Mather, Appl. Opt. 21, 1125 (1982). The Allan
+compared with J. C. Mather, Appl. Opt. 21, 1125 (1982). The
+matched-filter energy resolution is the frequency-domain optimal-filter
+result `(int_0^inf 4 df / NEP^2)^(-1/2)` of S. H. Moseley, J. C. Mather
+and D. McCammon, J. Appl. Phys. 56, 1257 (1984); its band-limited form
+(0.14.0) stops the integral at the readout bandwidth. The Allan
 variance follows D. W. Allan, Proc. IEEE 54, 221 (1966) and W. J.
 Riley, Handbook of Frequency Stability Analysis, NIST Special
 Publication 1065 (2008). The temperature design follows F. Pukelsheim,

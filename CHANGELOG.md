@@ -1,5 +1,116 @@
 # Changelog
 
+## 0.14.0 (2026-10-18)
+
+The matched-filter energy resolution for a readout of finite
+bandwidth, and the bandwidth a target resolution needs; the exact
+critical current of the full finite-length model and an exact
+calibration option; the covariance of the noise-spectrum fit; one
+correction (found by a test that fails on 0.13.0); a faster Markov
+dwell test; and a third tutorial. No function was renamed or removed,
+and README Examples 1 to 12 print the same output as with 0.13.0.
+
+### Added
+
+- `energy_resolution(..., f_max=None)` and `matched_filter_sigma(...,
+  f_max=None)`: the matched filter restricted to the readout band
+  0 <= f <= f_max, sigma_E^-2 = 4 int_0^f_max df / NEP^2, in closed
+  form (partial fractions of 1 / (a + b w^2 + c w^4), with a series
+  limit where the two roots nearly coincide). The unlimited integral
+  is the optimal-filter result of S. H. Moseley, J. C. Mather and
+  D. McCammon, J. Appl. Phys. 56, 1257 (1984) (Eq. (5) of their NASA
+  TM 80092 preprint). `SensorBudget.bandwidth_for_resolution(T, tauA,
+  factor=1.1, S_ro_y=0, which="L")`: the bandwidth at which the
+  resolution is `factor` times the unlimited value. README Example 13.
+- `JunctionModel.Ic_matsubara(T, ...)`: the critical current of the
+  full model as the maximum of the Matsubara-sum current (grid of 31
+  phases, refined by a bounded Brent search), without the energy and
+  phase grids of `Ic`. At 20 mK (scale 1) the level-based `Ic` is
+  4.2e-4 to 1.8e-3 below it for Ta/Ti/Au, Ti/Al/Au, Ti/Al(thin) and
+  Ti/Al(thick), 1.5e-4 above it for Ti/Nb/NbN, and 1.7 % above it
+  for MoRe, whose level-based current scatters by up to 3 % between
+  neighboring grid phases near its maximum (6.04982 to 6.35094 uA
+  over three grid points, against a smooth 6.23 to 6.21 uA from the
+  Matsubara sum). `JunctionModel.calibrate(T0, method="matsubara")`
+  and `junction_properties(..., method="matsubara")` use it; the
+  default `method="levels"` is unchanged, so every earlier calibration
+  stays as it was. README Example 14.
+- `TelegraphPSDFit.cov`: the covariance of (S0, tau_s[, floor]) in
+  their own units, with the correlations that `sigma` leaves out.
+- `examples/tutorial_readout_bandwidth.py`.
+
+### Fixed
+
+- `FiniteLJunction.level_data` (and so `andreev_sums` and
+  `saturation_ratio`) for |phi| below its difference step dphi =
+  1e-3 rad. The levels at phi - dphi, phi and phi + dphi were matched
+  by their order in energy, but the two levels of an Andreev doublet
+  cross at phi = 0, so the stencil switched branch: the slope of a
+  doublet level came out as -alpha phi / dphi instead of -alpha and
+  its curvature as about -2 alpha / dphi. Ti/Al(thick) at 0.3 Tc,
+  `saturation_ratio(phi, T, "L")`: 853.79 -> 1.00747 at phi = 1e-4,
+  965.59 -> 1.00747 at phi = 0, 94.87 -> 1.00747 at phi = 9e-4
+  (1.0074676 at phi = 1e-3, unchanged). Each level is now followed
+  along its branch (signed angle 2 asin(sqrt(tau) sin(phi/2))) when
+  the stencil crosses phi = 0 (mod 2 pi); elsewhere the code and the
+  results are those of 0.13.0. `C_A` was not affected.
+- Documentation: the module docstring of `absnoise.levels` said the
+  junction current counts bound states only; the code has included
+  the continuum since 0.1.0.
+
+### Changed
+
+- `FiniteLJunction.andreev_sums` and `saturation_ratio` refuse a
+  `which` other than "I" or "L" (it was taken as "L") and a
+  temperature that is not positive or is at or above Tc (a NaN ratio
+  before). `SensorBudget` refuses a `sigma`, `delta`, `L_r` or `nu_r`
+  that is not finite and positive (a ZeroDivisionError or NaN later,
+  before).
+- `absnoise.levels.matsubara_free_energy_terms` moved its summation
+  into a helper shared with `Ic_matsubara`; the operations are the
+  same, in the same order.
+- Type hints on the public functions touched.
+- Packaging: a new `MANIFEST.in` puts `examples/`, `CHANGELOG.md`,
+  `CITATION.cff` and `CONTRIBUTING.md` into the source distribution.
+  Without the examples the tutorial tests were skipped when the suite
+  ran from the 0.13.0 sdist; from the 0.14.0 sdist all 267 tests run
+  and pass.
+
+### Performance
+
+- `markov_dwell_test`: the simulated traces are drawn from the same
+  random stream in the same order and decoded in batches
+  (`_viterbi_batch`: the Viterbi recursion over a vector of traces,
+  the same additions and comparisons as `viterbi`). The paths are
+  integers and are compared exactly with `viterbi` in the tests, and
+  the result equals that of the 0.13.0 loop exactly. README Example 10
+  call (20 000 samples, 500 traces), median of 5 runs, two interleaved
+  rounds on a shared machine: 11.25 s -> 3.69 s and 16.17 s -> 5.87 s
+  (3.0 and 2.8 times).
+
+### Tutorials
+
+- `examples/tutorial_readout_bandwidth.py`: a noise record of the
+  resonator frequency -> averaged spectrum -> tauA, readout floor and
+  plateau with their covariance -> energy resolution for 1, 3 and
+  10 MHz of readout bandwidth and the bandwidth for 1.1 times the
+  unlimited value, with error bars.
+
+### Tests
+
+- New `tests/test_v014.py` (67 tests, about 20 s). The fix against
+  level slopes and curvatures from implicit differentiation of the
+  level condition (coded in the test; fails on 0.13.0); `Ic_matsubara`
+  against the closed-form short-junction maximum and the level path;
+  the band integral against adaptive quadrature for every branch, the
+  band-limited resolution against quadrature of 4 / NEP^2 from
+  `nep_spectrum`, its low-bandwidth limit and the 0.10.x grid integral
+  over its own band, the bandwidth against its closed form without a
+  floor; `TelegraphPSDFit.cov` against 400 simulated spectra; the
+  batched decoder and the dwell test against the 0.13.0 code (kept in
+  the tests); the tutorial output.
+- 267 tests in total (200 in 0.13.0).
+
 ## 0.13.0 (2026-10-17)
 
 Exact inductance and Kerr term for the full finite-length model, a fit
