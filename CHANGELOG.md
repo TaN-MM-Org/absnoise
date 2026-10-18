@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.15.0 (2026-10-18)
+
+The exact critical current is now the default calibration.
+
+### Changed
+
+- `JunctionModel.calibrate` and `junction_properties` use
+  `method="matsubara"` by default: the scale is set so that the exact
+  maximum of the Matsubara-sum current (`Ic_matsubara`) at 20 mK equals
+  the measured `Ic20`. Up to 0.14.0 the default was `method="levels"`,
+  the largest value of the level-based `current_phase` on its phase
+  grid, which lies 1.7 % above the exact maximum for MoRe. A model
+  calibrated by default therefore had an exact critical current at
+  20 mK of 0.98344 `Ic20` for MoRe; now it is `Ic20` (1e-9). Scales of
+  the shipped recipes, 0.14.0 -> 0.15.0: Ta(10)/Ti(60)/Au(5) 0.383553
+  -> 0.382872 (-0.18 %), Ti(6)/Al(60)/Au(5) 0.517814 -> 0.517578
+  (-0.05 %), Ti(6)/Al(70) 0.554064 -> 0.553802 (-0.05 %), Ti(6)/Al(200)
+  0.658375 -> 0.658100 (-0.04 %), Ti(6)/Nb(5)/NbN(50) 0.133312 ->
+  0.133331 (+0.01 %), MoRe(50) 0.492841 -> 0.501142 (+1.68 %). Every
+  current-like quantity of a calibrated `JunctionModel` scales with it;
+  README Example 11 changes in the last digit of `L_J` (0.2195 ->
+  0.2196 nH, 0.2219 -> 0.2220 nH), no other example or tutorial
+  changes. `method="levels"` reproduces 0.14.0. The MoRe calibration
+  takes about 27 s instead of 4 s on the development machine.
+  `ShortJunction.calibrate` was always exact and is unchanged. Tests:
+  `tests/test_v015.py` (fails on 0.14.0); the 0.14.0 tests that
+  relied on the old default now pass `method="levels"`.
+
 ## 0.14.0 (2026-10-18)
 
 The matched-filter energy resolution for a readout of finite

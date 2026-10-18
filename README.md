@@ -712,8 +712,8 @@ print(f"I(pi/2): levels + continuum {I_levels * 1e6:.5f} uA, "
 ```
 
 ```
-T = 0.020 K: Ic = 2.110 uA, L_J = 0.2195 nH, a3/a1 = -0.0594
-T = 0.225 K: Ic = 2.007 uA, L_J = 0.2219 nH, a3/a1 = -0.0640
+T = 0.020 K: Ic = 2.110 uA, L_J = 0.2196 nH, a3/a1 = -0.0594
+T = 0.225 K: Ic = 2.007 uA, L_J = 0.2220 nH, a3/a1 = -0.0640
 I(pi/2): levels + continuum 3.67599 uA, Matsubara sum 3.67775 uA (scale 1)
 ```
 
@@ -856,10 +856,11 @@ finds the maximum of the Matsubara-sum current instead (no energy or
 phase grid; see Example 11), and `calibrate(method="matsubara")` uses
 it. For Ti/Al/Au the two differ by 4.5e-4. For MoRe the level-based
 current scatters by up to 3 % between neighboring grid phases near its
-maximum, and its `Ic` lies 1.7 % above the exact maximum. The default
-stays `method="levels"`, so that every calibration of earlier releases
-is unchanged. `junction_properties(..., method="matsubara")` gives the
-whole table from the exact sum.
+maximum, and its `Ic` lies 1.7 % above the exact maximum. Since 0.15.0
+the exact maximum is the default of `calibrate` and of
+`junction_properties`, so a calibrated model reproduces the measured
+`Ic20` exactly. `method="levels"` gives the calibrations of earlier
+releases.
 
 ## Tutorials
 
@@ -943,7 +944,8 @@ New:
   finite-length model, from the Matsubara-sum current;
   `calibrate(method="matsubara")` and
   `junction_properties(..., method="matsubara")` use it (Example 14).
-  The default calibration is unchanged.
+  In 0.14.0 the default calibration stayed as it was; since 0.15.0 it
+  is the exact one.
 - `TelegraphPSDFit.cov`: the covariance of the fitted spectrum
   parameters, with their correlations.
 - A third tutorial, on the readout bandwidth (see [Tutorials](#tutorials)).
@@ -1584,7 +1586,36 @@ check that refusals fire. The main checks:
 
 ## Corrections in earlier versions
 
-**0.14.0 (this release) corrects one result of 0.13.0.** It was found
+**0.15.0 (this release) corrects the default calibration.** Up to
+0.14.0, `JunctionModel.calibrate` and `junction_properties` set the
+scale so that the level-based `Ic`, the largest value of
+`current_phase` on its phase grid, equals the measured `Ic20`. For MoRe
+that value lies 1.7 % above the exact maximum of the same model, so
+the exact critical current of a calibrated MoRe model at 20 mK was
+1.7 % below the measured value it was calibrated to (0.98344 `Ic20`).
+Both now use the exact maximum (`Ic_matsubara`) by default, and the
+exact critical current equals `Ic20` (1e-9 in the test). The scales
+of the shipped recipes, before and after:
+
+| Recipe | 0.14.0 (`method="levels"`) | 0.15.0 (default) | Change |
+|---|---|---|---|
+| Ta(10)/Ti(60)/Au(5) | 0.383553 | 0.382872 | -0.18 % |
+| Ti(6)/Al(60)/Au(5) | 0.517814 | 0.517578 | -0.05 % |
+| Ti(6)/Al(70) | 0.554064 | 0.553802 | -0.05 % |
+| Ti(6)/Al(200) | 0.658375 | 0.658100 | -0.04 % |
+| Ti(6)/Nb(5)/NbN(50) | 0.133312 | 0.133331 | +0.01 % |
+| MoRe(50) | 0.492841 | 0.501142 | +1.68 % |
+
+Every quantity of a calibrated `JunctionModel` scales with it. Of the
+README examples only Example 11 changes, in the last digit of `L_J`
+(0.2195 to 0.2196 nH and 0.2219 to 0.2220 nH). Pass
+`method="levels"` to reproduce 0.14.0. The calibration of MoRe now
+takes about 27 s instead of 4 s (the cost of the exact maximum grows
+as `1/T`); for the other recipes it took 1 to 10 s either way.
+`ShortJunction.calibrate` was always exact and is unchanged. Tests:
+`tests/test_v015.py`.
+
+**0.14.0 corrects one result of 0.13.0.** It was found
 by a test that fails on 0.13.0 and passes now (`tests/test_v014.py`).
 It does not change the output of Examples 1 to 12.
 
@@ -1829,15 +1860,15 @@ No earlier release records a correction. The full history is in
   of `Ic` away from zero phase, and its two end points (`phi = 1e-3`
   and `pi - 1e-3`, one-sided differences) are off by 1 to 2 % of `Ic`
   (zero-length test case). Its maximum lies inside the grid for the
-  shipped recipes. These values are kept as they were, so that
-  calibrations stay unchanged; use `cpr_matsubara` where these errors
-  matter. At 20 mK `Ic` lies 4.2e-4 to 1.8e-3 below the exact maximum
+  shipped recipes. Use `cpr_matsubara` where these errors matter. At
+  20 mK `Ic` lies 4.2e-4 to 1.8e-3 below the exact maximum
   (`Ic_matsubara`) for four recipes and 1.5e-4 above it for Ti/Nb/NbN.
   For MoRe (the largest `L/xi`, 0.43) the level-based current scatters
   by up to 3 % between neighboring grid phases near its maximum, and
-  `Ic` lies 1.7 % above the exact maximum, so the default calibration
-  of MoRe carries that error; `calibrate(method="matsubara")` avoids
-  it.
+  `Ic` lies 1.7 % above the exact maximum. Since 0.15.0 `calibrate` and
+  `junction_properties` use the exact maximum by default, so this
+  error no longer enters the calibration; with `method="levels"` it
+  does.
 - The cost of `Ic_matsubara` grows as `1/T`. At 20 mK it took about
   1.5 s for Ti/Al/Au (the level-based `Ic` about 4 s) and about 20 s
   for MoRe (2.1e5 Matsubara terms for each of 159 modes; the
