@@ -255,8 +255,8 @@ def test_ic_matsubara_agrees_with_the_level_path_and_calibrates():
     # anywhere on a fine grid
     assert Ic_mat >= np.max(m.cpr_matsubara(0.02, np.linspace(0.01, 3.13,
                                                                40)))
-    s_lev = m.calibrate()
-    assert s_lev == r.Ic20 / Ic_lev                # default unchanged
+    s_lev = m.calibrate(method="levels")
+    assert s_lev == r.Ic20 / Ic_lev                # the 0.14.0 default
     s_mat = m.calibrate(method="matsubara")
     assert s_mat == pytest.approx(r.Ic20 / Ic_mat, rel=1e-12)
     assert m.Ic_matsubara(0.02) == pytest.approx(r.Ic20, rel=1e-12)
@@ -271,7 +271,7 @@ def test_ic_matsubara_agrees_with_the_level_path_and_calibrates():
 def test_junction_properties_matsubara_method():
     r = _narrow(1, 0.3e-6)
     T = np.array([0.225])
-    lev = junction_properties(r, T)
+    lev = junction_properties(r, T, method="levels")
     mat = junction_properties(r, T, method="matsubara")
     # the series terms differ only by the calibration scale
     k = mat["scale"] / lev["scale"]
@@ -487,4 +487,4 @@ def test_version_matches_pyproject():
     with open(path) as fh:
         line = next(ln for ln in fh if ln.startswith("version = "))
     import absnoise
-    assert line.split('"')[1] == absnoise.__version__ == "0.14.0"
+    assert line.split('"')[1] == absnoise.__version__ == "0.15.0"
