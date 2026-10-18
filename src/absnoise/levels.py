@@ -35,7 +35,8 @@ Chaos, Solitons & Fractals 8, 1249 (1997), Eqs. (6) and (8)):
 `matsubara_free_energy_terms`, `JunctionModel.cpr_matsubara` and the
 exact Taylor coefficients `JunctionModel.cpr_series`. New in 0.14.0:
 the exact critical current `JunctionModel.Ic_matsubara`, and
-`calibrate(method="matsubara")`.
+`calibrate(method="matsubara")`. Since 0.15.0 that exact method is the
+default of `calibrate` and `junction_properties`.
 """
 
 import numpy as np
@@ -524,16 +525,21 @@ class JunctionModel:
                     best_I, best_phi = Iv, pv
         return (best_I, best_phi) if return_phase else best_I
 
-    def calibrate(self, T0: float = 0.02, method: str = "levels") -> float:
+    def calibrate(self, T0: float = 0.02,
+                  method: str = "matsubara") -> float:
         """Set `scale` so that the critical current at T0 equals the
         measured `recipe.Ic20`; returns the scale.
 
-        method="levels" (the default, unchanged) uses `Ic`, the maximum
-        of `current_phase` on the phase grid. method="matsubara" (new in
-        0.14.0) uses `Ic_matsubara`, the exact maximum of the
-        Matsubara-sum current; the scales differ by the grid error of
-        `Ic` (4.2e-4 to 1.8e-3 for five shipped recipes, 1.7 % for
-        MoRe; see `Ic_matsubara`). The gap is
+        method="matsubara" (the default since 0.15.0) uses
+        `Ic_matsubara`, the exact maximum of the Matsubara-sum current.
+        method="levels" (the default up to 0.14.0, kept to reproduce
+        earlier results) uses `Ic`, the maximum of `current_phase` on
+        its phase grid. The scales differ by the grid error of `Ic`:
+        4.2e-4 to 1.8e-3 for five shipped recipes, and 1.7 % for MoRe,
+        whose level-based current scatters near its maximum (see
+        `Ic_matsubara`). With method="levels", the exact critical
+        current of a calibrated MoRe model at 20 mK was 1.7 % below the
+        measured Ic20. The gap is
         `self.Delta` (by default the zero-temperature gap of the
         recipe, the convention of `junction_properties`)."""
         if method not in ("levels", "matsubara"):
@@ -680,7 +686,7 @@ def gap_bcs(T, Tc: float, Delta0: float):
 
 def junction_properties(recipe: Recipe, T_grid, n_phi: int = 121,
                         verbose: bool = False,
-                        method: str = "levels") -> dict:
+                        method: str = "matsubara") -> dict:
     """Temperature table of junction observables for one recipe.
 
     Includes the BCS suppression of the proximity gap Delta*(T).
@@ -695,12 +701,13 @@ def junction_properties(recipe: Recipe, T_grid, n_phi: int = 121,
     Ti/Al/Au at 0.3 Tc a3 was 6 % too large in magnitude (a1 within
     5e-4). Ic is unchanged.
 
-    method="levels" (default) takes Ic and the calibration from the
-    level-plus-continuum `current_phase` on its phase grid, as before.
-    method="matsubara" (new in 0.14.0) takes both from
-    `JunctionModel.Ic_matsubara`, the exact maximum of the
-    Matsubara-sum current, so that Ic, dIdphi0 and a3 all come from the
-    same exact free energy (n_phi is then not used).
+    method="matsubara" (new in 0.14.0, the default since 0.15.0) takes
+    Ic and the calibration from `JunctionModel.Ic_matsubara`, the exact
+    maximum of the Matsubara-sum current, so that Ic, dIdphi0 and a3
+    all come from the same exact free energy (n_phi is then not used).
+    method="levels" (the default up to 0.14.0) takes both from the
+    level-plus-continuum `current_phase` on its phase grid; use it to
+    reproduce earlier tables.
     """
     if method not in ("levels", "matsubara"):
         raise ValueError("method must be 'levels' or 'matsubara'")
