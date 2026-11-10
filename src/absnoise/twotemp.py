@@ -79,11 +79,25 @@ def two_temperature_click(budget, E_gamma, tauA, T0, c_ph=None,
     c_ph = float(c_ph)
     kappa_pb = float(kappa_pb)
     delta_pb = float(delta_pb)
+    # (fixed in 0.16.0) non-finite values, a non-positive tauA or T0
+    # and a non-finite deposit are refused, as in `click_template`. Up
+    # to 0.15.0 a NaN c_ph or E_gamma returned NaN trajectories and a
+    # negative tauA an occupation that ran away from its equilibrium
+    # (m = 1.0012 > 1 after 2 ns in the test case, Ti/Al/Au at 0.1 K)
+    if not (np.isfinite(c_ph) and np.isfinite(kappa_pb)
+            and np.isfinite(delta_pb)):
+        raise ValueError("c_ph, kappa_pb and delta_pb must be finite")
     if c_ph <= 0.0 or kappa_pb < 0.0 or delta_pb <= 0.0:
         raise ValueError("c_ph and delta_pb must be positive, "
                          "kappa_pb non-negative")
-    if E_gamma < 0.0:
-        raise ValueError("deposited energy must be non-negative")
+    E_gamma, tauA, T0 = float(E_gamma), float(tauA), float(T0)
+    if not (np.isfinite(E_gamma) and E_gamma >= 0.0):
+        raise ValueError("deposited energy must be finite and "
+                         "non-negative (J)")
+    if not (np.isfinite(tauA) and tauA > 0.0):
+        raise ValueError("tauA must be finite and positive (s)")
+    if not (np.isfinite(T0) and T0 > 0.0):
+        raise ValueError("T0 must be finite and positive (K)")
     if scenario not in ("C", "T"):
         raise ValueError("scenario must be 'C' or 'T'")
 

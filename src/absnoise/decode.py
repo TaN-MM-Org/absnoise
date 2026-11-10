@@ -90,7 +90,12 @@ class TelegraphHMM:
         """(f, tauA) implied by the flip probabilities at sample time dt:
         f = p_up / s and tauA = -dt / ln(1 - s), s = p_up + p_dn (the
         exact inverse of `from_rates`). Raises ValueError if s >= 1: an
-        anti-correlated chain is not a sampled telegraph process."""
+        anti-correlated chain is not a sampled telegraph process, and
+        (since 0.16.0) if dt is not finite and positive (a negative dt
+        gave a negative tauA)."""
+        dt = float(dt)
+        if not (np.isfinite(dt) and dt > 0.0):
+            raise ValueError("dt must be finite and positive (s)")
         s = self.p_up + self.p_dn
         if not s < 1.0:
             raise ValueError(
@@ -315,6 +320,8 @@ class TelegraphHMM:
         sig = {nm: float(np.sqrt(cov[i, i])) for i, nm in enumerate(names)}
         if dt is not None:
             dt = float(dt)
+            if not (np.isfinite(dt) and dt > 0.0):
+                raise ValueError("dt must be finite and positive (s)")
             u, d = self.p_up, self.p_dn
             s = u + d
             if not s < 1.0:

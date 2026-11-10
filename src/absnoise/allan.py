@@ -26,6 +26,12 @@ but error-prone, so the test suite checks the closed form against a
 direct numerical evaluation of the defining integrals, both limits,
 and seeded telegraph Monte Carlo.
 
+Sampled data (new in 0.16.0): `allan_variance` averages a whole number
+m of samples, not a continuous window, and for windows of a few samples
+its expectation differs from the formula above (by 51 % for m = 1 at
+dt = tau/40). `avar_exponential(..., dt=dt)` gives the exact
+expectation for samples taken every dt.
+
 Exact facts the test suite asserts, rather than states:
 
 * A pure linear drift x = c t has Allan deviation c T / sqrt(2),
@@ -64,8 +70,10 @@ def allan_variance(x, dt, m_list=None):
     if not np.all(np.isfinite(x)):
         raise ValueError("series contains non-finite samples")
     dt = float(dt)
-    if dt <= 0.0:
-        raise ValueError("dt must be positive")
+    # (fixed in 0.16.0) an infinite or NaN dt was accepted and gave
+    # infinite or NaN averaging times
+    if not (np.isfinite(dt) and dt > 0.0):
+        raise ValueError("dt must be finite and positive")
     n = x.size
     if m_list is None:
         m_list = []
@@ -86,7 +94,46 @@ def allan_variance(x, dt, m_list=None):
     return taus, avar
 
 
-def avar_exponential(var: float, tau_c: float, T):
+def _avar_sampled_bracket(m, eps):
+    """N(m, eps) = m (1 - r^2) - r (3 - 4 r^m + r^(2m)), r = exp(-eps),
+    for integer m >= 1 and eps = dt/tau > 0 (arrays of equal shape),
+    without cancellation (new in 0.16.0).
+
+    For m eps >= 0.5 the closed form is used directly. Below, its terms
+    cancel to order eps^3, and N is summed as its Taylor series in eps:
+    expanding every exponential gives
+    N = sum_{n>=3} (-1)^n c_n eps^n / n!,
+    c_n = 4 (m+1)^n - (2m+1)^n - m 2^n - 3 (the coefficients of n = 0,
+    1 and 2 vanish identically), evaluated as
+    4 x1^n - x2^n - m x3^n - 3 eps^n with x1 = (m+1) eps,
+    x2 = (2m+1) eps, x3 = 2 eps, all below 1.5. 40 terms reach machine
+    precision there (the terms fall like 1.5^n / n!)."""
+    shape = np.shape(m)
+    m = np.atleast_1d(np.asarray(m, dtype=float)).ravel()
+    eps = np.atleast_1d(np.asarray(eps, dtype=float)).ravel()
+    r = np.exp(-eps)
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        out = (m * (-np.expm1(-2.0 * eps))
+               - r * (3.0 - 4.0 * np.exp(-m * eps)
+                      + np.exp(-2.0 * m * eps)))
+    small = m * eps < 0.5
+    if np.any(small):
+        ms, es = m[small], eps[small]
+        x1, x2, x3 = (ms + 1.0) * es, (2.0 * ms + 1.0) * es, 2.0 * es
+        p1 = p2 = p3 = p0 = np.ones_like(es)
+        fact = 1.0
+        series = np.zeros_like(es)
+        for n in range(1, 41):
+            p1, p2, p3, p0 = p1 * x1, p2 * x2, p3 * x3, p0 * es
+            fact *= n
+            if n >= 3:
+                series = series + (-1.0) ** n * (
+                    4.0 * p1 - p2 - ms * p3 - 3.0 * p0) / fact
+        out[small] = series
+    return out.reshape(shape)
+
+
+def avar_exponential(var: float, tau_c: float, T, dt: float | None = None):
     """Closed-form Allan variance of exponentially correlated noise.
 
     var : process variance (for a telegraph occupation, f (1 - f)).
@@ -104,6 +151,25 @@ def avar_exponential(var: float, tau_c: float, T):
     because the four terms of the closed form cancel to order r^3:
     up to 0.11.0 the result was 6e-5 too low at T = 1e-4 tau, 17 % too
     high at 1e-5 tau and negative at 1e-6 tau.
+
+    dt (s, new in 0.16.0): the sample interval of the data. The formula
+    above is the Allan variance of the continuous-time process, averaged
+    over windows of length T. `allan_variance` averages m = T/dt
+    samples instead, and for a sampled process (autocovariance
+    var r^|k|, r = exp(-dt/tau)) the expectation of that estimator is
+
+        AVAR(m) = var [m (1 - r^2) - r (3 - 4 r^m + r^(2m))]
+                  / (m^2 (1 - r)^2),
+
+    which follows from summing the autocovariance over the two
+    adjacent windows (checked in the tests against that double sum in
+    50-digit arithmetic and against telegraph Monte Carlo). It is
+    var (1 - r) for one-sample windows and tends to the continuous
+    form as dt/tau -> 0 at fixed T; for few samples per window the two
+    differ: by 51 % at m = 1 and 2.2 % at m = 5 for dt = tau/40, and by
+    0.2 % at m = 20. With dt, every T must be a whole number m >= 1 of
+    sample intervals (within 1e-9 relative), as the windows of
+    `allan_variance` are.
     """
     v = float(var)
     tau = float(tau_c)
@@ -114,6 +180,19 @@ def avar_exponential(var: float, tau_c: float, T):
     T = np.asarray(T, dtype=float)
     if np.any(T <= 0.0) or not np.all(np.isfinite(T)):
         raise ValueError("averaging times must be finite and positive")
+    if dt is not None:
+        dt = float(dt)
+        if not (np.isfinite(dt) and dt > 0.0):
+            raise ValueError("dt must be finite and positive (s), or None")
+        m = np.round(T / dt)
+        if np.any(m < 1.0) or np.any(np.abs(T / dt - m) > 1e-9 * m):
+            raise ValueError("with dt, every averaging time must be a "
+                             "whole number m >= 1 of sample intervals "
+                             "(T = m dt), as in allan_variance")
+        a = -np.expm1(-dt / tau)                 # 1 - r
+        eps = np.full_like(m, dt / tau)
+        out = v * _avar_sampled_bracket(m, eps) / (m ** 2 * a ** 2)
+        return float(out) if out.ndim == 0 else out
     r = T / tau
     with np.errstate(over="ignore", invalid="ignore"):
         out = v * (tau / T ** 2) * (2.0 * T - 3.0 * tau

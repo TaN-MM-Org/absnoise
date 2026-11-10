@@ -50,6 +50,12 @@ together). Without `n_avg` nothing is corrected, because the offset is
 unknown; for n_avg = n the bias of S0 and floor is then the factor
 above. The Gamma statistics are exact for Gaussian noise and hold
 approximately for telegraph noise over records much longer than tau.
+
+Sampled traces (new in 0.16.0). A periodogram of a trace sampled every
+dt contains the noise of every frequency f + n/dt folded onto f
+(aliasing). For the Lorentzian this sum has a closed form (see
+`telegraph_psd_model`), and `fit_telegraph_psd(..., dt=dt)` fits it.
+Without dt the fit is the one of earlier releases.
 """
 from __future__ import annotations
 
@@ -62,12 +68,44 @@ from scipy.special import digamma, polygamma
 __all__ = ["TelegraphPSDFit", "fit_telegraph_psd", "telegraph_psd_model"]
 
 
-def telegraph_psd_model(f_hz, S0, tau_s, floor=0.0):
+def telegraph_psd_model(f_hz, S0, tau_s, floor=0.0, dt=None):
     """The single-sided model PSD S0 / (1 + (2 pi f tau)^2) + floor --
     the closed form of `absnoise.telegraph`, exposed for plotting and
-    cross-checks."""
+    cross-checks.
+
+    dt (s, new in 0.16.0): the sample interval of a sampled trace. The
+    spectrum of the samples x(k dt) of an exponentially correlated
+    process (autocovariance var r^|k|, r = exp(-dt/tau), var =
+    S0/(4 tau)) is not the Lorentzian: the noise above the Nyquist
+    frequency 1/(2 dt) folds back into the band (aliasing). Its exact
+    single-sided spectrum on 0 <= f <= 1/(2 dt) is
+
+        S(f) = S0 (dt / (2 tau)) (1 - r^2)
+               / ((1 - r)^2 + 4 r sin^2(pi f dt)) + floor,
+
+    the sum of the Lorentzian over all its aliases,
+    sum_n S0 / (1 + (2 pi tau (f + n/dt))^2), and the transform of the
+    sampled autocovariance (both checked in the tests, together with
+    Parseval: its integral over 0 <= f <= 1/(2 dt) is S0/(4 tau)). It
+    tends to the Lorentzian as dt/tau -> 0. It holds for samples that
+    are instantaneous values of the process, as `telegraph_traces`
+    produces; a readout that averages over each sample interval, or
+    filters before sampling, has a different spectrum. `floor` is a
+    white noise of the samples (flat in the sampled spectrum, too). A
+    dt that is not finite and positive is refused."""
     f = np.asarray(f_hz, dtype=float)
-    return S0 / (1.0 + (2.0 * np.pi * f * tau_s) ** 2) + floor
+    if dt is None:
+        return S0 / (1.0 + (2.0 * np.pi * f * tau_s) ** 2) + floor
+    dt = float(dt)
+    if not (np.isfinite(dt) and dt > 0.0):
+        raise ValueError("dt must be finite and positive (s), or None")
+    eps = dt / tau_s
+    # 1 - r and 1 - r^2 without cancellation for small dt/tau
+    one_m_r = -np.expm1(-eps)
+    one_m_r2 = -np.expm1(-2.0 * eps)
+    r = np.exp(-eps)
+    den = one_m_r ** 2 + 4.0 * r * np.sin(np.pi * f * dt) ** 2
+    return S0 * (0.5 * eps) * one_m_r2 / den + floor
 
 
 @dataclasses.dataclass
@@ -92,6 +130,10 @@ class TelegraphPSDFit:
         the values, so sqrt(diag(cov)) equals `sigma`. It carries the
         correlations (tau and the floor are usually correlated) that
         `sigma` alone leaves out.
+    dt : the sample interval given to the fit (new in 0.16.0), or None
+        when the continuous-time Lorentzian was fitted. With dt, S0 is
+        still the plateau of the underlying Lorentzian, 4 var tau, so
+        `variance` keeps its meaning.
     """
 
     S0: float
@@ -103,9 +145,11 @@ class TelegraphPSDFit:
     chi2_dof: int | None
     model: np.ndarray
     cov: np.ndarray | None = None
+    dt: float | None = None
 
 
-def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDFit:
+def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None,
+                      dt=None) -> TelegraphPSDFit:
     """Fit the Lorentzian occupation-noise model to a measured PSD.
 
     f_hz : (n,) positive frequencies (drop the DC bin).
@@ -121,6 +165,19 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
         are not biased low, and uses the exact log-variance psi'(n) per
         bin for the error bars and a chi-square consistency check (see
         the module docstring; changed in 0.11.0).
+    dt : the sample interval (s) of the trace behind the spectrum (new
+        in 0.16.0). When given, the fit uses the exact spectrum of the
+        sampled process, `telegraph_psd_model(..., dt=dt)`, which
+        includes the noise folded back from above the Nyquist frequency
+        1/(2 dt); every frequency must then lie in (0, 1/(2 dt)]. The
+        continuous Lorentzian (dt=None, the default and the behavior up
+        to 0.15.0) puts that folded-back noise into the floor, or, with
+        fit_floor=False, into S0 and tau: on the noise-free sampled
+        spectrum at every bin of a 4096-sample record (zero and Nyquist
+        bins left out), tau came out 3.7 % long at dt = tau/40 with a
+        fitted floor and 27 % short without one (checked in the
+        tests). See `telegraph_psd_model` for when the sampled model
+        applies.
 
     Raises ValueError on malformed input and on the out-of-band knee
     (see module docstring: a band that never sees the knee cannot
@@ -143,6 +200,17 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
             "S0/floor split) cannot be determined from this band. "
             "Extend the band past the knee, or determine tau from a "
             "resolved time trace with absnoise.decode")
+    if dt is not None:
+        dt = float(dt)
+        if not (np.isfinite(dt) and dt > 0.0):
+            raise ValueError("dt must be finite and positive (s), or None "
+                             "for the continuous-time Lorentzian")
+        if float(f.max()) > 0.5 / dt * (1.0 + 1e-9):
+            raise ValueError(
+                f"frequency {f.max():.6g} Hz lies above the Nyquist "
+                f"frequency 1/(2 dt) = {0.5 / dt:.6g} Hz of the stated "
+                "sample interval: a sampled spectrum has no such bin; "
+                "check dt")
     if n_avg is not None and not (np.isfinite(float(n_avg))
                                   and float(n_avg) >= 1.0):
         raise ValueError("n_avg must be >= 1 (the number of averaged "
@@ -176,7 +244,7 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
 
     def resid(p):
         S0, tau, fl = unpack(p)
-        return np.log(telegraph_psd_model(f, S0, tau, fl)) - logS
+        return np.log(telegraph_psd_model(f, S0, tau, fl, dt)) - logS
 
     res = least_squares(resid, p0, xtol=1e-14, ftol=1e-14, gtol=1e-14)
     if not res.success:
@@ -217,5 +285,5 @@ def fit_telegraph_psd(f_hz, S_meas, fit_floor=True, n_avg=None) -> TelegraphPSDF
     return TelegraphPSDFit(
         S0=float(S0), tau_s=float(tau), floor=float(fl), sigma=sigma,
         variance=float(S0 / (4.0 * tau)), chi2=chi2, chi2_dof=chi2_dof,
-        model=telegraph_psd_model(f, S0, tau, fl),
-        cov=cov_log * np.outer(vv, vv))
+        model=telegraph_psd_model(f, S0, tau, fl, dt),
+        cov=cov_log * np.outer(vv, vv), dt=dt)

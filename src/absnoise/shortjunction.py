@@ -144,14 +144,35 @@ class ShortJunction:
         gL = (2.0 * E_CHARGE / HBAR) * (-d2E)
         return dict(E=E, v=v, gI=gI, gL=gL, Delta=D)
 
+    def _check_sums(self, T, which):
+        """Refuse inputs the occupation sums cannot answer (new in
+        0.16.0, as `FiniteLJunction` does since 0.14.0). Up to 0.15.0 a
+        `which` other than "I" was taken as "L" (so "i" gave the
+        inductance coupling), T at or above Tc or T = 0 raised
+        ZeroDivisionError, and a negative T returned NaN."""
+        if which not in ("I", "L"):
+            raise ValueError("which must be 'I' or 'L'")
+        T = float(T)
+        if not (np.isfinite(T) and T > 0.0):
+            raise ValueError("temperature must be finite and positive (K)")
+        if not self.Delta(T) > 0.0:
+            raise ValueError(f"T = {T:.4g} K is at or above Tc = "
+                             f"{self.Tc:.4g} K: there are no Andreev "
+                             "levels")
+        return T
+
     def andreev_sums(self, phi, T, which="I"):
         """Occupation-channel responsivity and zero-frequency noise sums.
 
         R_occ  = dO/dT (occupation part) = sum_ch g * v * E / (kB T^2)
         S0/tauA = sum_ch g^2 * v * 4         (single-sided, per tauA)
         C_A    = sum_ch,spins E^2 f(1-f)/(kB T^2) = sum_ch v E^2/(kB T^2)
-        All sums carry the calibration scale on couplings.
+        All sums carry the calibration scale on couplings. which is
+        "I" (current coupling) or "L" (inductance coupling); anything
+        else is refused (since 0.16.0), as is a temperature that is not
+        positive or is at or above Tc.
         """
+        T = self._check_sums(T, which)
         t = self.level_tables(phi, T)
         g = float(self.scale * (t["gI"] if which == "I" else t["gL"]))
         v, E = float(t["v"]), float(t["E"])
@@ -165,7 +186,16 @@ class ShortJunction:
         """Achieved and bound temperature resolution (K) for integration
         time t_int: var(T) = S_T(0)/(2 t);
         bound: var(T) >= 2 kB T^2 tauA / (C_A t)  (Supplement, Cauchy-
-        Schwarz over channels; saturated by uniform-tau short junctions)."""
+        Schwarz over channels; saturated by uniform-tau short junctions).
+        Since 0.16.0 an unknown `which`, a temperature outside (0, Tc)
+        and a tauA or t_int that is not finite and positive are refused
+        (a typo such as "i" chose the phase of one readout and the
+        coupling of the other, and a negative tauA gave NaN)."""
+        T = self._check_sums(T, which)
+        for name, val in (("tauA", tauA), ("t_int", t_int)):
+            v = float(val)
+            if not (np.isfinite(v) and v > 0.0):
+                raise ValueError(f"{name} must be finite and positive (s)")
         if phi is None:
             phi = 1e-4 if which == "L" else self.phi_max(T)
         s = self.andreev_sums(phi, T, which)

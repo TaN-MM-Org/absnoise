@@ -88,8 +88,17 @@ def psd_single_sided(x, dt):
     (for even n) Nyquist bins appear once in the two-sided spectrum
     and are not doubled (fixed in 0.11.0; before, the Nyquist bin was
     doubled). With this convention sum(S) * df equals the variance of
-    x exactly (Parseval), df = 1 / (n dt)."""
+    x exactly (Parseval), df = 1 / (n dt).
+
+    Since 0.16.0 a dt that is not finite and positive is refused (up to
+    0.15.0 a negative dt returned a negative spectrum at negative
+    frequencies), as are non-finite samples and an empty series."""
+    dt = float(dt)
+    if not (np.isfinite(dt) and dt > 0.0):
+        raise ValueError("dt must be finite and positive (s)")
     x = np.asarray(x, dtype=float)
+    if x.size < 1 or not np.all(np.isfinite(x)):
+        raise ValueError("x must hold at least one sample, all finite")
     x = x - np.mean(x)
     n = len(x)
     X = np.fft.rfft(x)

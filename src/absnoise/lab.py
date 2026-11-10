@@ -207,9 +207,10 @@ def psd_band_for_tau(tau_expected_s, margin=4.0):
     return f_c / m, f_c * m, f_c
 
 
-def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor):
+def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt=None):
     """d log(model) / d log(parameter) at the working point -- the
-    same log-space parameterization `fit_telegraph_psd` uses."""
+    same log-space parameterization `fit_telegraph_psd` uses (and the
+    same model: with dt, the spectrum of the sampled process)."""
     from .psdfit import telegraph_psd_model
     f = np.asarray(f, dtype=float).ravel()
     p0 = [np.log(S0), np.log(tau_s)] \
@@ -218,7 +219,7 @@ def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor):
     def logmodel(p):
         s0, tau = np.exp(p[0]), np.exp(p[1])
         fl = np.exp(p[2]) if fit_floor else floor
-        return np.log(telegraph_psd_model(f, s0, tau, fl))
+        return np.log(telegraph_psd_model(f, s0, tau, fl, dt))
 
     jac = np.empty((f.size, len(p0)))
     for j in range(len(p0)):
@@ -231,7 +232,8 @@ def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor):
 
 
 def plan_psd_measurement(f_hz, n_avg: float, S0: float, tau_s: float,
-                         floor: float = 0.0, fit_floor: bool = True) -> dict:
+                         floor: float = 0.0, fit_floor: bool = True,
+                         dt: float | None = None) -> dict:
     """Predicted PSD-fit error bars for a planned averaging depth.
 
     f_hz : the frequency bins you will record (must satisfy the same
@@ -250,8 +252,13 @@ def plan_psd_measurement(f_hz, n_avg: float, S0: float, tau_s: float,
     error bar scales exactly as sqrt(psi'(n_avg)), which approaches
     1/sqrt(n_avg) for many averages (0.4 % larger at n_avg = 64, 28 %
     larger at n_avg = 1).
+
+    dt (s, new in 0.16.0): plan the fit `fit_telegraph_psd(...,
+    dt=dt)` of a spectrum of a trace sampled every dt, with the
+    sampled-process model (aliasing included); the frequencies must
+    then lie in (0, 1/(2 dt)], as the fit requires.
     """
-    _check_psd_point(f_hz, S0, tau_s, floor)
+    _check_psd_point(f_hz, S0, tau_s, floor, dt)
     # an effective, non-integer n_avg is accepted, as `fit_telegraph_psd`
     # accepts it (fixed in 0.12.0: int() truncated it, so n_avg = 1.5
     # was planned as 1)
@@ -260,7 +267,7 @@ def plan_psd_measurement(f_hz, n_avg: float, S0: float, tau_s: float,
         raise ValueError("n_avg must be finite and >= 1 (the number of "
                          "averaged periodograms behind each bin)")
     f = np.asarray(f_hz, dtype=float).ravel()
-    jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor)
+    jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt)
     fisher = jac.T @ jac / _log_var(n_avg)
     names = ["S0", "tau_s"] + (["floor"] if fit_floor else [])
     identifiable, cond, sig_frac = _invert_information(fisher, names)
@@ -281,7 +288,7 @@ def _log_var(n_avg):
 
 
 def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
-                     fit_floor=True):
+                     fit_floor=True, dt=None):
     """How many periodogram averages does a target tau error bar
     cost? Every error bar scales as sqrt(psi'(n_avg)) (see
     `plan_psd_measurement`), so this returns the smallest integer
@@ -292,12 +299,14 @@ def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
 
     Returns (n_avg, plan) with `plan` the `plan_psd_measurement`
     result at the returned depth. Refuses bands the fit itself would
-    refuse, with the same explanation.
+    refuse, with the same explanation. dt (new in 0.16.0): as in
+    `plan_psd_measurement`.
     """
     t = float(target_sigma_tau_s)
     if not (np.isfinite(t) and t > 0.0):
         raise ValueError("target_sigma_tau_s must be positive (s)")
-    base = plan_psd_measurement(f_hz, 1, S0, tau_s, floor, fit_floor)
+    base = plan_psd_measurement(f_hz, 1, S0, tau_s, floor, fit_floor,
+                                dt)
     if not base["identifiable"]:
         raise ValueError("the band cannot determine the parameters "
                          "at any averaging depth; change the band "
@@ -311,10 +320,10 @@ def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
     while _log_var(n) > q:
         n += 1
     return n, plan_psd_measurement(f_hz, n, S0, tau_s, floor,
-                                   fit_floor)
+                                   fit_floor, dt)
 
 
-def _check_psd_point(f_hz, S0, tau_s, floor):
+def _check_psd_point(f_hz, S0, tau_s, floor, dt=None):
     from .psdfit import telegraph_psd_model
     f = np.asarray(f_hz, dtype=float).ravel()
     if f.size < 8 or np.any(f <= 0.0) or not np.all(np.isfinite(f)):
@@ -324,6 +333,15 @@ def _check_psd_point(f_hz, S0, tau_s, floor):
             and tau_s > 0.0 and np.isfinite(floor) and floor >= 0.0):
         raise ValueError("S0 and tau_s must be positive and floor "
                          ">= 0")
+    if dt is not None:
+        dt = float(dt)
+        if not (np.isfinite(dt) and dt > 0.0):
+            raise ValueError("dt must be finite and positive (s), or None")
+        if float(f.max()) > 0.5 / dt * (1.0 + 1e-9):
+            raise ValueError(
+                f"frequency {f.max():.6g} Hz lies above the Nyquist "
+                f"frequency 1/(2 dt) = {0.5 / dt:.6g} Hz: the fit "
+                "would refuse it")
     f_knee = 1.0 / (2.0 * np.pi * tau_s)
     if f_knee < 2.0 * f.min() or f_knee > 0.5 * f.max():
         raise ValueError(
@@ -332,7 +350,7 @@ def _check_psd_point(f_hz, S0, tau_s, floor):
             "the fit's factor-2 margin: `fit_telegraph_psd` would "
             "refuse this measurement, so it is refused here, before "
             "the fridge time (see psd_band_for_tau)")
-    S = telegraph_psd_model(f, S0, tau_s, floor)
+    S = telegraph_psd_model(f, S0, tau_s, floor, dt)
     if float(S.max() / S.min()) < 4.0:
         raise ValueError(
             "the expected spectrum varies by less than a factor of 4 "

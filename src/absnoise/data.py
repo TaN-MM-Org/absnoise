@@ -43,6 +43,20 @@ _IC3 = ("T_K", "Ic_A", "sigma_Ic_A")
 _TR = ("t_s", "y")
 
 
+def _finite_row(rec, line):
+    """The fields of one data row as floats; refuses a non-finite value
+    (fixed in 0.16.0). Python's float() reads "nan" and "inf", and up to
+    0.15.0 both loaders passed them on: a nan temperature slipped
+    through the "strictly increasing" check (every comparison with nan
+    is false), and a nan time made `load_trace_csv` return dt = nan."""
+    vals = [float(v) for v in rec]
+    if not all(np.isfinite(v) for v in vals):
+        raise ValueError(f"line {line}: non-finite value in {rec}; the "
+                         "file is refused, not repaired (remove or "
+                         "re-measure that point)")
+    return vals
+
+
 def save_ic_csv(path, T_K, Ic_A, sigma_Ic_A=None):
     """Write an Ic(T) curve in the documented contract."""
     T = np.asarray(T_K, dtype=float).ravel()
@@ -68,8 +82,9 @@ def save_ic_csv(path, T_K, Ic_A, sigma_Ic_A=None):
 def load_ic_csv(path):
     """Read an Ic(T) curve; returns (T_K, Ic_A, sigma_Ic_A or None).
 
-    Refusals instead of guesses: wrong header, wrong field count, or
-    a temperature axis that is not strictly increasing.
+    Refusals instead of guesses: wrong header, wrong field count, a
+    non-finite value (nan, inf; refused since 0.16.0), or a temperature
+    axis that is not strictly increasing.
     """
     rows = []
     with open(path, newline="") as fh:
@@ -88,7 +103,7 @@ def load_ic_csv(path):
                 continue
             if len(rec) != ncol:
                 raise ValueError(f"line {line}: expected {ncol} fields")
-            rows.append([float(v) for v in rec])
+            rows.append(_finite_row(rec, line))
     if len(rows) < 2:
         raise ValueError("Ic file contains fewer than 2 data rows")
     arr = np.asarray(rows, dtype=float)
@@ -147,7 +162,8 @@ def load_trace_csv(path, rtol=1e-6):
 
     The time grid must be uniform to relative tolerance `rtol` (the
     decoder and the spectral estimators assume uniform sampling); a
-    non-uniform grid is refused, not resampled.
+    non-uniform grid is refused, not resampled. A non-finite value
+    (nan, inf) is refused too (since 0.16.0).
     """
     ts, ys = [], []
     with open(path, newline="") as fh:
@@ -164,8 +180,9 @@ def load_trace_csv(path, rtol=1e-6):
                 continue
             if len(rec) != 2:
                 raise ValueError(f"line {line}: expected 2 fields")
-            ts.append(float(rec[0]))
-            ys.append(float(rec[1]))
+            t_val, y_val = _finite_row(rec, line)
+            ts.append(t_val)
+            ys.append(y_val)
     t = np.asarray(ts, dtype=float)
     y = np.asarray(ys, dtype=float)
     if t.size < 2:

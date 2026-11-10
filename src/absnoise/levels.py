@@ -768,6 +768,18 @@ def free_energy_components(model, T, n_E=3000):
     return Fb, Fc
 
 
+def _phase_stencil(recipe, n_phi, phi0):
+    """The phases phi0 - dphi, phi0, phi0 + dphi, with dphi the step of
+    the phase grid of `JunctionModel(recipe, n_phi)` (new in 0.16.0)."""
+    grid = JunctionModel(recipe, n_phi=n_phi).phis
+    dphi = grid[1] - grid[0]
+    phi0 = float(phi0)
+    if not (np.isfinite(phi0) and dphi < phi0 < np.pi - dphi):
+        raise ValueError(f"phi0 must lie between dphi = {dphi:.4g} and "
+                         f"pi - dphi (rad); got {phi0!r}")
+    return np.array([phi0 - dphi, phi0, phi0 + dphi])
+
+
 def continuum_share(recipe: Recipe, T: float, n_phi: int = 81,
                     phi0: float = np.pi / 2) -> dict:
     """Fraction of the supercurrent I(phi0) and of its temperature
@@ -789,21 +801,33 @@ def continuum_share(recipe: Recipe, T: float, n_phi: int = 81,
     ZeroDivisionError, for example at 20 mK for Ti/Al/Au). Up to about
     0.06 Tc dI/dT is still at the rounding level, so share_dIdT there
     carries no information.
+
+    Changed in 0.16.0: the shares are evaluated at phi0 itself, by the
+    central difference (F(phi0 + dphi) - F(phi0 - dphi)) / (2 dphi)
+    with the step dphi = (pi - 2e-3) / (n_phi - 1) of the phase grid of
+    `JunctionModel(recipe, n_phi)`. Up to 0.15.0 they were evaluated at
+    the grid phase nearest to phi0 (up to dphi/2 = 0.020 rad away for
+    n_phi = 81) without notice: for Ti/Al/Au (W = 0.3 um) at 0.225 K,
+    phi0 = 1.0 returned the value at phi = 0.982 (share_I -0.25436
+    instead of -0.25109). At a grid phase, including the default
+    pi/2, the result is unchanged (to rounding). phi0 must lie in
+    (dphi, pi - dphi).
     """
     T = float(T)
     if not (np.isfinite(T) and 0.0 < T < recipe.Tc):
         raise ValueError("T must lie between 0 and the recipe's Tc (K)")
+    phis = _phase_stencil(recipe, n_phi, phi0)
 
     def I_parts(TT):
         m = JunctionModel(recipe, n_phi=n_phi)
+        dphi = m.phis[1] - m.phis[0]
+        m.phis = phis
         m.Delta = float(gap_bcs(TT, recipe.Tc, recipe.Delta))
         Fb, Fc = free_energy_components(m, TT)
-        dphi = m.phis[1] - m.phis[0]
-        j = int(np.argmin(np.abs(m.phis - phi0)))
         out = []
         for F in (Fb, Fc):
-            I = (2.0 * E_CHARGE / HBAR) * 2.0 * np.gradient(F, dphi)
-            out.append(float(I[j]))
+            dF = (F[2] - F[0]) / (2.0 * dphi)
+            out.append(float((2.0 * E_CHARGE / HBAR) * 2.0 * dF))
         return out
 
     dT = min(2e-3 * recipe.Tc, 0.5 * T, 0.1 * (recipe.Tc - T))
@@ -837,11 +861,32 @@ def occupation_heat_capacities(recipe, T, phi0=np.pi / 2, n_phi=81,
 
     Returns dict(C_bound, C_cont, share_CA) in J/K; share_CA is the
     continuum fraction of the total.
+
+    Changed in 0.16.0: the heat capacities are evaluated at phi0 itself
+    (n_phi is no longer used). Up to 0.15.0 they were taken at the
+    phase of an n_phi grid nearest to phi0 (up to 0.020 rad away for
+    n_phi = 81) without notice: for Ti/Al/Au at 0.3 Tc and phi0 = 1.0,
+    C_bound was 1.28775e-21 J/K (the value at phi = 0.982) instead of
+    1.30354e-21 J/K, 1.2 % off the level sum C_A of `FiniteLJunction`
+    at phi0. At a grid phase, including the default pi/2, the result
+    is unchanged (to rounding). Also new: T must lie in (0, Tc), phi0
+    in (0, pi) and dT_frac in (0, 1); up to 0.15.0 a temperature at or
+    above Tc raised ZeroDivisionError and a negative one returned NaN.
     """
+    T = float(T)
+    if not (np.isfinite(T) and 0.0 < T < recipe.Tc):
+        raise ValueError("T must lie between 0 and the recipe's Tc (K)")
+    dT_frac = float(dT_frac)
+    if not (np.isfinite(dT_frac) and 0.0 < dT_frac < 1.0):
+        raise ValueError("dT_frac must lie in (0, 1)")
+    phi0 = float(phi0)
+    if not (np.isfinite(phi0) and 0.0 < phi0 < np.pi):
+        raise ValueError("phi0 must lie in (0, pi) (rad)")
     m = JunctionModel(recipe, n_phi=n_phi)
+    m.phis = np.array([phi0])
     m.Delta = float(gap_bcs(T, recipe.Tc, recipe.Delta))
     m.compute_levels()
-    j = int(np.argmin(np.abs(m.phis - phi0)))
+    j = 0
     dT = dT_frac * T
     vals_b, vals_c = [], []
     for TT in (T - dT, T, T + dT):
