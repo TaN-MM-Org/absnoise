@@ -1,5 +1,126 @@
 # Changelog
 
+## 0.16.0 (2026-11-10)
+
+The noise spectrum and the Allan variance of sampled data, five
+corrections (each found by a test that fails on 0.15.0), and test
+tolerances that check what they state. No function was renamed or
+removed, and README Examples 1 to 14 and the tutorials print the same
+output as with 0.15.0.
+
+### Added
+
+- `telegraph_psd_model(..., dt=None)`, `fit_telegraph_psd(...,
+  dt=None)`, `plan_psd_measurement(..., dt=None)` and
+  `averages_for_tau(..., dt=None)`: with the sample interval dt, the
+  exact single-sided spectrum of the samples of an exponentially
+  correlated process, S(f) = S0 (dt / (2 tau)) (1 - r^2) /
+  ((1 - r)^2 + 4 r sin^2(pi f dt)) + floor, r = exp(-dt/tau), on
+  0 <= f <= 1/(2 dt). It is the Lorentzian summed over all its copies
+  folded back from multiples of the sampling rate (aliasing). S0 keeps
+  its meaning (4 var tau), so `TelegraphPSDFit.variance` does too; the
+  fit result records `dt`. With dt every frequency must lie at or below
+  the Nyquist frequency. dt=None (the default) is the 0.15.0 model,
+  bit for bit. On the noise-free sampled spectrum at every bin of a
+  4096-sample record, the Lorentzian fit put tau 3.7 % long with a
+  floor and 27 % short without one at dt = tau/40; on telegraph Monte
+  Carlo at dt = tau/4 the Lorentzian fit with a floor was 4 % long on
+  average, the sampled fit without bias. This lifts the README limit
+  "the fit does not model folded-back (aliased) noise". README
+  Example 15.
+- `avar_exponential(..., dt=None)`: with dt, the expected value of the
+  overlapping estimator `allan_variance` for windows of m = T/dt whole
+  samples, AVAR(m) = var [m (1 - r^2) - r (3 - 4 r^m + r^(2m))] /
+  (m^2 (1 - r)^2), summed as a Taylor series below m dt/tau = 0.5 (its
+  terms cancel to order (dt/tau)^3 there). It differs from the
+  continuous-time form by 51 % (m = 1), 2.2 % (m = 5) and 0.17 %
+  (m = 20) at dt = tau/40. README Example 15.
+
+### Fixed
+
+- `occupation_heat_capacities(recipe, T, phi0)` and
+  `continuum_share(recipe, T, phi0=...)` returned their values at the
+  phase of an n_phi grid nearest to phi0 (default 81 phases, up to
+  0.020 rad away). Ti/Al/Au at 0.3 Tc, phi0 = 1.0: C_bound
+  1.28775e-21 -> 1.30354e-21 J/K (the level sum C_A of
+  `FiniteLJunction` at phi0 is 1.30354e-21; it was 1.2 % off),
+  share_CA 0.026745 -> 0.026097. Ti/Al/Au with W = 0.3 um at 0.225 K,
+  phi0 = 1.0: share_I -0.25436 -> -0.25109, share_dIdT -0.10794 ->
+  -0.10481. Both now evaluate at phi0 itself (`continuum_share` with
+  the central difference of step (pi - 2e-3)/(n_phi - 1), the grid
+  step it used before). At a grid phase, including the default pi/2,
+  the results are unchanged to rounding (1e-9 in the tests, the
+  0.15.0 computation kept there). `occupation_heat_capacities` no
+  longer uses n_phi.
+- `load_ic_csv` and `load_trace_csv` passed `nan` and `inf` on
+  (Python's float reads them). A nan temperature passed the "strictly
+  increasing" check; a nan time gave dt = nan from `load_trace_csv`.
+  Both now refuse the file and name the line.
+- `ShortJunction.andreev_sums` took any `which` other than "I" as "L":
+  which="i" at phi = 1, 0.225 K for Ti/Al/Au returned R_occ
+  -2.788e-7 (the inductance readout) instead of refusing (the current
+  readout gives -3.311e-7). `temperature_bound` chose the phase by the
+  opposite rule. T at or above Tc raised ZeroDivisionError, T < 0 and
+  a negative tauA returned NaN. All are refused now, as in
+  `SensorBudget` and `FiniteLJunction`.
+- `two_temperature_click` ran with tauA <= 0 (tauA = -1e-7: occupation
+  1.0012 after 2 ns in the test case, above its largest possible
+  value 1) and returned NaN trajectories for a NaN deposit or phonon
+  parameter. It now refuses non-finite inputs and a non-positive tauA
+  or T0, as `click_template` does.
+- `psd_single_sided(x, dt)` with dt < 0 returned a negative spectrum at
+  negative frequencies (dt = 0: ZeroDivisionError);
+  `allan_variance` accepted dt = inf or nan (inf or nan averaging
+  times); `TelegraphHMM.rates(dt)` with dt < 0 returned a negative
+  tauA (-32.83 for p_up = 0.01, p_dn = 0.02, dt = -1). All refuse a dt
+  that is not finite and positive now (also
+  `TelegraphHMM.uncertainties`), and `psd_single_sided` refuses
+  non-finite samples.
+
+### Changed
+
+- `occupation_heat_capacities` refuses T outside (0, Tc) (T >= Tc
+  raised ZeroDivisionError, T < 0 returned NaN), phi0 outside (0, pi)
+  and dT_frac outside (0, 1); `continuum_share` refuses phi0 closer
+  than one grid step to 0 or pi (it used a one-sided difference at the
+  grid end before).
+- `TelegraphPSDFit` has a new last field `dt` (default None).
+
+### Performance
+
+- `occupation_heat_capacities` and `continuum_share` compute the
+  levels and the free energy at 1 and 3 phases instead of 81. Full
+  Ti/Al/Au recipe at 0.3 Tc, default arguments, median of 5 on a
+  shared machine: 2.04 s -> 0.063 s and 2.47 s -> 0.119 s.
+
+### Tests
+
+- New `tests/test_v016.py` (28 tests, about 4 s): the sampled spectrum
+  against the transform of the sampled autocovariance summed term by
+  term (1e-9), against the explicit sum over the folded copies of the
+  Lorentzian (1e-9), Parseval (1e-10) and the continuous limit; the
+  fit on noise-free spectra (1e-6) and on 40 telegraph records (error
+  bars calibrated, chi2/dof 1, scatter of tau equal to the plan); the
+  planner against the fit (1e-3); the sampled Allan variance against
+  the defining double sum in 50-digit decimal arithmetic (1e-13), its
+  limits and telegraph Monte Carlo (3 %); a regression test for each
+  correction above.
+- Test tolerances: 77 comparisons in the earlier test files used
+  `pytest.approx(..., rel=...)`, `numpy.isclose` or `numpy.allclose`
+  without an absolute tolerance, so the default absolute tolerance
+  (1e-12 for pytest, 1e-8 for NumPy) applied as well. For small
+  quantities this emptied the check: `pytest.approx(1.30e-21,
+  rel=1e-5)` accepts 1.29e-21, and the 0.15.0 claim "the exact critical
+  current equals Ic20 (1e-9 in the test)" was checked to 1e-12 A, that
+  is 3e-7 relative. All 77 now state abs=0 (atol=0) and all pass, so
+  the documented tolerances hold; no package result changed.
+- 297 tests in total (269 in 0.15.0; the README said 267).
+
+### CI
+
+- The test workflow runs on `ubuntu-24.04` instead of
+  `ubuntu-latest`, which now has no Python 3.9.
+
 ## 0.15.0 (2026-10-18)
 
 The exact critical current is now the default calibration.

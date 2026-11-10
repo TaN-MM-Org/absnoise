@@ -42,6 +42,7 @@ number that looks fine but is not.
 - [Units and conventions](#units-and-conventions)
 - [Examples](#examples) (each with the output it prints)
 - [Tutorials](#tutorials) (three end-to-end scripts in `examples/`)
+- [What changed in 0.16.0](#what-changed-in-0160)
 - [What changed in 0.14.0](#what-changed-in-0140)
 - [What changed in 0.13.0](#what-changed-in-0130)
 - [What changed in 0.12.0](#what-changed-in-0120)
@@ -99,6 +100,11 @@ number that looks fine but is not.
   the same density at all frequencies. A **periodogram** is the PSD
   estimated from one recorded trace; averaging many periodograms
   reduces their scatter.
+- **Sampling**: a recorded trace holds the signal at times spaced by
+  the sample interval `dt`. The highest frequency such a trace can
+  show is the **Nyquist frequency** `1/(2 dt)`. Noise at higher
+  frequencies does not vanish: it reappears at lower frequencies in
+  the spectrum of the samples (**aliasing**, or folding back).
 - **Monte Carlo** -- a simulation driven by random numbers, used here
   to generate example noise traces and check the formulas against
   them.
@@ -165,8 +171,8 @@ run `pip install -e .[test]`, then `pytest`.
 ## Examples
 
 Each example below runs as written, and the output shown is what it
-printed with absnoise 0.14.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
-Examples 1 to 12 print the same as with 0.13.0.
+printed with absnoise 0.16.0 (Python 3.13, NumPy 2.5.3, SciPy 1.18.1).
+Examples 1 to 14 print the same as with 0.15.0.
 Values not taken from the shipped recipes -- correlation times,
 geometries, noise levels -- are illustrative, not measurements.
 
@@ -862,6 +868,74 @@ the exact maximum is the default of `calibrate` and of
 `Ic20` exactly. `method="levels"` gives the calibrations of earlier
 releases.
 
+### 15. A trace sampled not much faster than it flips
+
+```python
+import numpy as np
+from absnoise import (telegraph_traces, psd_single_sided, fit_telegraph_psd,
+                      allan_variance, avar_exponential)
+
+# 8 occupations summed, f = 0.3, tau = 1 ms, sampled every 0.25 ms
+# (a quarter of tau; illustrative values), cut into 32 segments.
+rng = np.random.default_rng(0)
+f_occ, tau, dt = 0.3, 1e-3, 2.5e-4
+x = telegraph_traces(f_occ, tau, dt, 32 * 2048, 8, rng).sum(axis=1)
+x = x.astype(float)
+
+S = np.mean([psd_single_sided(s, dt)[1] for s in x.reshape(32, -1)],
+            axis=0)[1:-1]
+f = np.fft.rfftfreq(2048, dt)[1:-1]      # every bin below the Nyquist frequency
+for label, kw in (("Lorentzian, floor fitted", {}),
+                  ("Lorentzian, no floor    ", dict(fit_floor=False)),
+                  ("sampled (dt), no floor  ", dict(fit_floor=False, dt=dt))):
+    fit = fit_telegraph_psd(f, S, n_avg=32, **kw)
+    print(f"{label}: tau = {fit.tau_s * 1e3:.3f} +- "
+          f"{fit.sigma['tau_s'] * 1e3:.3f} ms, "
+          f"chi2 = {fit.chi2:.0f} for {fit.chi2_dof} dof")
+
+var = 8 * f_occ * (1 - f_occ)
+taus, avar = allan_variance(x, dt, m_list=[1, 2, 8])
+cont = avar_exponential(var, tau, taus)
+samp = avar_exponential(var, tau, taus, dt=dt)
+for T, a, c, s in zip(taus, avar, cont, samp):
+    print(f"T = {T * 1e3:.2f} ms: measured {a:.3f}, "
+          f"continuous {c:.3f}, sampled {s:.3f}")
+```
+
+```
+Lorentzian, floor fitted: tau = 1.053 +- 0.017 ms, chi2 = 1056 for 1020 dof
+Lorentzian, no floor    : tau = 0.713 +- 0.008 ms, chi2 = 2722 for 1021 dof
+sampled (dt), no floor  : tau = 0.993 +- 0.013 ms, chi2 = 1019 for 1021 dof
+T = 0.25 ms: measured 0.372, continuous 0.233, sampled 0.372
+T = 0.50 ms: measured 0.457, continuous 0.391, sampled 0.459
+T = 2.00 ms: measured 0.664, continuous 0.640, sampled 0.654
+```
+
+A recorded trace holds samples, not the continuous signal. The noise
+above the Nyquist frequency (2 kHz here) folds back into the spectrum
+of the samples, which at 2 kHz is 2.5 times the Lorentzian. Without
+`dt`, `fit_telegraph_psd` fits the Lorentzian: here it puts `tau` 5 %
+too long when the floor takes up the folded noise, and 29 % too short
+without a floor (with a chi2 far above the degrees of freedom). With
+`dt` (new in 0.16.0) it fits the exact spectrum of the sampled
+process, the Lorentzian summed over all its folded copies (see
+`telegraph_psd_model`). Then `tau` lies 0.5 error bars from the true
+1 ms and chi2 matches the degrees of freedom. Over 40 such records the
+tests find the plain fit with a floor 4 % long on average, and the
+sampled fit without a bias.
+
+The Allan variance has the same issue for short windows.
+`allan_variance` averages whole samples, and for a window of one or
+two samples its expectation differs from the continuous-time closed
+form (0.372 against 0.233 here). `avar_exponential(..., dt=dt)` (new
+in 0.16.0) gives the expectation for samples taken every `dt`. For
+long windows the two agree: Example 5 uses windows of 20 samples and
+more, where they differ by less than 0.2 %. Both sampled formulas
+assume that each sample is the value of the signal at one instant, as
+in `telegraph_traces`. A readout that averages over each sample
+interval, or filters the signal before sampling, has a different
+spectrum.
+
 ## Tutorials
 
 Three end-to-end scripts in the `examples/` folder go from synthetic
@@ -930,6 +1004,49 @@ readout bandwidth  3 MHz: 3.035e-21 +- 0.044e-21 J (1.10 times the unlimited val
 readout bandwidth 10 MHz: 2.826e-21 +- 0.043e-21 J (1.03 times the unlimited value)
 bandwidth for 1.1 times the unlimited value: 3.08 +- 0.03 MHz
 ```
+
+## What changed in 0.16.0
+
+New (Example 15):
+
+- `fit_telegraph_psd(..., dt=...)`, `telegraph_psd_model(..., dt=...)`,
+  `plan_psd_measurement(..., dt=...)` and `averages_for_tau(...,
+  dt=...)`: the noise spectrum of a trace sampled every `dt`, with the
+  noise folded back from above the Nyquist frequency, in closed form.
+  Without `dt` the fit treats the spectrum as a Lorentzian, as before;
+  on a spectrum that reaches the Nyquist frequency this biases `tau`
+  (by 3.7 % even at `dt = tau/40`, in the tests). This lifts a stated
+  limit of earlier releases.
+- `avar_exponential(..., dt=...)`: the Allan variance that
+  `allan_variance` actually estimates, for windows of whole samples.
+  For a window of one sample it differs from the continuous-time
+  closed form by 51 % at `dt = tau/40`.
+
+Corrected (details and before/after numbers under
+[Corrections in earlier versions](#corrections-in-earlier-versions)):
+
+- `occupation_heat_capacities` and `continuum_share` at a phase that
+  is not on their internal phase grid: they used the nearest grid
+  phase (up to 0.020 rad away), without notice. The heat capacity of
+  the bound levels was then 1.2 % off at `phi0 = 1.0` for Ti/Al/Au.
+- `load_ic_csv` and `load_trace_csv` read `nan` and `inf`; a `nan`
+  time made `load_trace_csv` return `dt = nan`.
+- `ShortJunction.andreev_sums` and `temperature_bound` took any `which`
+  other than `"I"` as `"L"` (as `FiniteLJunction` did up to 0.13.0).
+- `two_temperature_click` ran with a negative `tauA` (the occupation
+  then rose above 1) and returned NaN for a NaN input.
+- `psd_single_sided` accepted a negative `dt` (a negative spectrum),
+  `allan_variance` an infinite or NaN `dt`, and `TelegraphHMM.rates` a
+  negative `dt` (a negative correlation time).
+
+Also: 77 comparisons in the earlier tests stated a relative tolerance
+but no absolute one, so the default absolute tolerance of
+`pytest.approx` (1e-12) or of NumPy's `isclose` (1e-8) applied. For
+quantities of order 1e-21 J/K or 1e-6 A that made the check almost
+empty: `pytest.approx(1.30e-21, rel=1e-5)` accepts 1.29e-21. All of
+them now state an absolute tolerance of 0 and still pass, so the
+tolerances this README quotes do hold. No function was renamed or
+removed, and Examples 1 to 14 print what they printed with 0.15.0.
 
 ## What changed in 0.14.0
 
@@ -1126,7 +1243,8 @@ The corrections, with before/after numbers, are listed under
 - `allan_variance`, `avar_exponential`, `avar_white` -- the Allan
   variance of data, and its closed forms for exponentially correlated
   and white noise (`avar_exponential` is accurate for any averaging
-  time since 0.12.0).
+  time since 0.12.0, and with `dt` since 0.16.0 gives the expectation
+  of `allan_variance` for data sampled every `dt`).
 
 **Device budget and single photons**
 
@@ -1155,7 +1273,9 @@ The corrections, with before/after numbers, are listed under
   computed from the fitted junction), and the model curve.
 - `fit_telegraph_psd`, `TelegraphPSDFit`, `telegraph_psd_model` -- the
   noise-spectrum fit, its result (with the covariance `cov` since
-  0.14.0), and the model spectrum.
+  0.14.0), and the model spectrum. Since 0.16.0 all three take the
+  sample interval `dt` of the trace, and then use the spectrum of the
+  sampled process, folded-back noise included.
 - `fit_hmm`, `TelegraphHMM` -- the readout-trace decoder
   (`posterior`, `viterbi`, `forward_backward`, `rates`, `from_rates`,
   and `uncertainties`, `score`, `loglik` for error bars).
@@ -1171,7 +1291,8 @@ The corrections, with before/after numbers, are listed under
   error bars, and which temperatures to measure.
 - `psd_band_for_tau`, `plan_psd_measurement`, `averages_for_tau` -- the
   frequency band, the planned spectrum-fit error bars, and the number
-  of averages for a target error on `tau`.
+  of averages for a target error on `tau` (the last two also for a
+  sampled spectrum, with `dt`, since 0.16.0).
 
 **Constants** -- `HBAR`, `KB`, `E_CHARGE`, `H_PLANCK`, `PHI0`, `EPS0`
 (CODATA 2018) and `V_F` (graphene Fermi velocity, 1.0e6 m/s).
@@ -1212,7 +1333,8 @@ gives its inputs, units and conventions.
   `validate_ic_data` refuses non-finite values, non-positive
   temperatures and negative currents.
 - `allan_variance` gets fewer than 4 samples, non-finite samples, a
-  non-positive `dt` or a window outside `1 <= m <= len(x)//2`; the
+  `dt` that is not finite and positive (non-finite since 0.16.0) or a
+  window outside `1 <= m <= len(x)//2`; the
   closed forms get a negative variance or PSD, or non-positive times
   (`avar_exponential` also refuses non-finite inputs).
 - `TelegraphHMM` gets flip probabilities outside (0, 1), a non-positive
@@ -1276,17 +1398,36 @@ gives its inputs, units and conventions.
   temperature that is not positive or is at or above `Tc` (a NaN ratio
   up to 0.13.0); `SensorBudget` gets a `sigma`, `delta`, `L_r` or
   `nu_r` that is not finite and positive.
+- `fit_telegraph_psd`, `plan_psd_measurement` and `averages_for_tau`
+  (0.16.0) get a `dt` that is not finite and positive, or, with `dt`, a
+  frequency above the Nyquist frequency `1/(2 dt)`; `avar_exponential`
+  gets a `dt` that is not finite and positive, or an averaging time
+  that is not a whole number of samples.
+- `load_ic_csv` and `load_trace_csv` (0.16.0) find `nan` or `inf` in
+  the file. `ShortJunction.andreev_sums` and `temperature_bound` get a
+  `which` other than `"I"` or `"L"`, a temperature that is not
+  positive or is at or above `Tc`, or (`temperature_bound`) a `tauA` or
+  `t_int` that is not finite and positive. `two_temperature_click` gets
+  a non-finite input or a non-positive `tauA` or `T0`.
+  `psd_single_sided` gets a `dt` that is not finite and positive, or
+  non-finite samples; `allan_variance`, `TelegraphHMM.rates` and
+  `uncertainties` get a `dt` that is not finite and positive. `continuum_share` gets a `phi0`
+  closer than one grid step to 0 or `pi`, and
+  `occupation_heat_capacities` a `phi0` outside (0, `pi`), a
+  temperature outside (0, `Tc`) or a `dT_frac` outside (0, 1).
 
 ## How the results are checked
 
-267 automated tests run on every push and pull request, on Python 3.9,
+297 automated tests run on every push and pull request, on Python 3.9,
 3.10, 3.11, 3.12, 3.13 and 3.14, and once more on Python 3.9 with the
 oldest NumPy (1.24.0) and SciPy (1.10.0) the package allows. The
 numerical checks compare the package with an exact formula, a second
 calculation done a different way, or a simulation. A few checks
 compare with stored numbers on purpose, for example the recipe table
 (locked to its source) and one tabulated value of the BCS gap. Others
-check that refusals fire. The main checks:
+check that refusals fire. Since 0.16.0 every comparison with a
+tolerance states its absolute tolerance, which is 0 wherever a
+relative tolerance is quoted below. The main checks:
 
 **Levels and gap**
 
@@ -1380,6 +1521,21 @@ check that refusals fire. The main checks:
   within 0.01 (the first-order rule would give 0).
 - Periodogram: `sum(S) df` equals the variance of the data to 1e-12
   (Parseval), for even and odd lengths.
+- Spectrum of a sampled trace (0.16.0): the closed form of
+  `telegraph_psd_model(..., dt)` equals the transform of the sampled
+  autocovariance, summed term by term, to 1e-9 for `dt/tau` from 0.01
+  to 4, and the sum of the Lorentzian over its folded copies
+  (`|n| <= 200 000`, the rest in closed form) to 1e-9. Its integral up
+  to the Nyquist frequency is the variance (1e-10), and at
+  `dt = 1e-4 tau` it equals the Lorentzian to 1e-6. Noise-free sampled
+  spectra (from the autocovariance sum) give back `S0`, `tau` and the
+  variance to 1e-6 and the floor to 1e-4. On 40 telegraph records
+  sampled at `dt = tau/4`, the errors of `tau` and `S0` divided by
+  their error bars have a mean within 0.6 of 0 and a spread between
+  0.75 and 1.3, the mean `chi2/dof` is within 0.025 of 1, and the
+  scatter of `tau` is within 20 % of the planned error bar; the
+  Lorentzian fit with a floor is more than 2.5 % long on average. The
+  planned error bars with `dt` equal the fit's within 0.1 %.
 - `sigma_spectrum` (0.13.0): for `f` down to 1e-200 and at 0 and 1
   the variance, plateau and correlation time equal the closed form of
   two independent spins (1e-12; 0.12.1 stopped with an
@@ -1390,9 +1546,14 @@ check that refusals fire. The main checks:
   0.12.1 step-by-step loop (kept in the tests) for eight sets of
   occupations, time steps and shapes, including block boundaries.
 - `occupation_heat_capacities`: the bound part equals the level sum
-  `C_A` of `FiniteLJunction` within 1e-5 (two code paths); the
-  continuum part is exactly 0 at zero length; for Ti/Al/Au at 0.3 `Tc`
-  it is positive and below 10 % of the total.
+  `C_A` of `FiniteLJunction` within 1e-5 (two code paths), also at
+  phases off the old phase grid (0.16.0; 0.15.0 was 1.2 % off at
+  `phi0 = 1.0`); the continuum part is exactly 0 at zero length; for
+  Ti/Al/Au at 0.3 `Tc` it is positive and below 10 % of the total.
+- `continuum_share` (0.16.0): at two grid phases it equals the 0.15.0
+  computation (kept in the tests) to 1e-9, and across the midpoint
+  between two grid phases it changes by less than 1e-5 (0.15.0 jumped
+  by 0.007 in `share_I` there).
 
 **Allan variance**
 
@@ -1405,6 +1566,14 @@ check that refusals fire. The main checks:
   integrals to 1e-6, and both limits to 1e-3.
 - Telegraph Monte Carlo matches the closed form within 12 %, white
   noise matches `S0/(2T)` within 5 %.
+- Sampled data (0.16.0): `avar_exponential(..., dt)` equals the
+  defining double sum over the autocovariance, evaluated in 50-digit
+  decimal arithmetic, to 1e-13 for windows of 1 to 60 samples and
+  `dt/tau` from 1e-7 to 20. It equals `var (1 - e^(-dt/tau))` for one
+  sample (1e-14) and `var/m` for samples far apart (1e-12), and the
+  continuous form at 20 000 samples per window (1e-4). Telegraph noise
+  sampled at `dt = tau/2` follows it within 3 %, while the continuous
+  form lies 41 % (one sample) and 18 % (two samples) below it.
 
 **Device budget**
 
@@ -1586,7 +1755,51 @@ check that refusals fire. The main checks:
 
 ## Corrections in earlier versions
 
-**0.15.0 (this release) corrects the default calibration.** Up to
+**0.16.0 (this release) corrects five problems of 0.15.0.** Each was
+found by a test that fails on 0.15.0 and passes now
+(`tests/test_v016.py`). None of them changes the output of Examples 1
+to 14 or of the tutorials.
+
+- **Heat capacities and shares at a phase off the grid.**
+  `occupation_heat_capacities(recipe, T, phi0)` and
+  `continuum_share(recipe, T, phi0=...)` computed the free energy on a
+  grid of `n_phi` phases (default 81, spacing 0.039 rad) and returned
+  the value at the grid phase nearest to `phi0`, up to 0.020 rad away.
+  For Ti/Al/Au at 0.3 `Tc` and `phi0 = 1.0`, `C_bound` was
+  1.28775e-21 J/K (its value at 0.982 rad) instead of 1.30354e-21
+  J/K, 1.2 % off the level sum `C_A` of `FiniteLJunction` at the same
+  phase; `share_CA` was 0.026745 instead of 0.026097. For Ti/Al/Au
+  narrowed to 0.3 um at 0.225 K and `phi0 = 1.0`, `continuum_share`
+  gave `share_I` -0.25436 instead of -0.25109 and `share_dIdT`
+  -0.10794 instead of -0.10481. Both now evaluate at `phi0` itself
+  (`continuum_share` with the same difference step as before). At a
+  grid phase, including the default `pi/2`, the results are unchanged.
+- **`nan` and `inf` in data files.** Python reads them as numbers, and
+  the loaders passed them on. A `nan` temperature passed the "strictly
+  increasing" check (every comparison with `nan` is false), and a
+  `nan` time made `load_trace_csv` return `dt = nan`. Both loaders now
+  refuse the file and name the line.
+- **Unknown readout in `ShortJunction`.** `andreev_sums` took any
+  `which` other than `"I"` as `"L"`: `which="i"` returned the
+  inductance-readout responsivity (-2.788e-7 instead of -3.311e-7 for
+  the current readout of Ti/Al/Au at `phi = 1` and 0.225 K).
+  `temperature_bound` used the opposite rule for the phase. A
+  temperature at or above `Tc` raised `ZeroDivisionError`, a negative
+  one returned NaN, and a negative `tauA` NaN. All are refused now
+  (`SensorBudget` already refused them).
+- **`two_temperature_click` without checks on `tauA` and `T0`.** With
+  `tauA = -1e-7` it ran and returned an occupation that left its
+  equilibrium (1.0012 after 2 ns in the test case, above its largest
+  possible value 1); a NaN deposit or phonon parameter gave NaN
+  trajectories. It now checks its inputs as `click_template` does.
+- **Sample intervals.** `psd_single_sided(x, -1.0)` returned a
+  negative spectrum at negative frequencies, `allan_variance` accepted
+  an infinite or NaN `dt` (infinite or NaN averaging times), and
+  `TelegraphHMM.rates(-1.0)` returned a negative correlation time
+  (-32.83 for flip probabilities 0.01 and 0.02). All three refuse such
+  a `dt` now.
+
+**0.15.0 corrects the default calibration.** Up to
 0.14.0, `JunctionModel.calibrate` and `junction_properties` set the
 scale so that the level-based `Ic`, the largest value of
 `current_phase` on its phase grid, equals the measured `Ic20`. For MoRe
@@ -1908,9 +2121,21 @@ No earlier release records a correction. The full history is in
   give `n_avg`, one number for all points (without it, `S0` and the
   floor are low by `exp(psi(n) - ln n)` for `n` averages). Even with
   it, the fitted floor kept a bias of about -5 % at `n_avg = 2` in the
-  tests (-1 % at 8). The fit uses the continuous-time Lorentzian; the
-  spectrum of a sampled trace also contains folded-back (aliased)
-  noise near the highest frequency, which the fit does not model.
+  tests (-1 % at 8). Without `dt` the fit uses the continuous-time
+  Lorentzian and does not model the noise folded back from above the
+  Nyquist frequency. Since 0.16.0 `dt` adds it, for samples that are
+  values of the signal at single instants. A readout that averages
+  over each sample interval, or filters the signal before sampling
+  (an anti-aliasing filter), has a different spectrum, which neither
+  model describes; fit only the band where that filter is flat, or
+  model it yourself. Both models describe the expected spectrum of an
+  infinitely long record; for a record not much longer than `tau`,
+  the lowest bins are also smoothed by the finite record length.
+- `avar_exponential(..., dt)` (0.16.0) is the expected value of
+  `allan_variance` for instantaneous samples of an exponentially
+  correlated process. The package gives no error bar for a measured
+  Allan variance; the scatter grows for windows close to the record
+  length (see Example 5).
 - `SensorBudget.energy_resolution` assumes an ideal matched filter over
   all frequencies, or (`f_max`, 0.14.0) over the frequencies up to
   `f_max` with nothing above: an ideal low-pass readout. A real
@@ -1972,7 +2197,10 @@ W m^-2 K^-3). Near `Tc` the gap equation
 is solved in its Matsubara-sum form, which follows from the integral
 form through the partial-fraction expansion
 `tanh(x/2) / x = sum_n 4 / (x^2 + (2n+1)^2 pi^2)`; the tests check the
-two forms against each other. A replacement recipe number
+two forms against each other. The spectrum and the Allan variance of
+sampled data (0.16.0) follow from summing the sampled autocovariance
+`var e^(-|k| dt/tau)`; the tests check both against that sum, done
+term by term. A replacement recipe number
 must arrive with a new source. No phonon-stack parameters are shipped
 at all -- they are measurements of a real device, and calls without
 them raise.
