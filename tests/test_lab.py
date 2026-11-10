@@ -60,7 +60,7 @@ def test_monte_carlo_matches_planned_sigma():
         fit = fit_ic_curve(T, np.abs(noisy), sigma_Ic=sig, n_phi=301)
         tcs.append(fit.Tc)
     emp = np.std(tcs, ddof=1)
-    assert np.isclose(emp, plan["sigma"]["Tc"], rtol=0.2)
+    assert np.isclose(emp, plan["sigma"]["Tc"], rtol=0.2, atol=0)
 
 
 def test_low_temperature_leverage_flagged():

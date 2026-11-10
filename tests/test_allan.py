@@ -14,7 +14,7 @@ def test_linear_drift_exact():
     c, dt = 0.37, 0.01
     t = np.arange(2000) * dt
     taus, avar = allan_variance(c * t, dt, m_list=[1, 5, 40, 250])
-    assert np.allclose(avar, 0.5 * (c * taus) ** 2, rtol=1e-12)
+    assert np.allclose(avar, 0.5 * (c * taus) ** 2, rtol=1e-12, atol=0)
 
 
 def test_closed_form_matches_defining_integrals():
@@ -34,7 +34,7 @@ def test_closed_form_matches_defining_integrals():
         EAB = trapezoid(kern * var * np.exp(-w / tau), w)
         avar_num = (EA2 - EAB) / T ** 2
         assert avar_exponential(var, tau, T) == pytest.approx(
-            avar_num, rel=1e-6)
+            avar_num, rel=1e-6, abs=0)
 
 
 def test_closed_form_limits():
@@ -42,11 +42,11 @@ def test_closed_form_limits():
     # T << tau: 2 var T / (3 tau)
     T = 1e-4
     assert avar_exponential(var, tau, T) == pytest.approx(
-        2.0 * var * T / (3.0 * tau), rel=1e-3)
+        2.0 * var * T / (3.0 * tau), rel=1e-3, abs=0)
     # T >> tau: S(0)/(2T) with S(0) = 4 var tau
     T = 1e4
     assert avar_exponential(var, tau, T) == pytest.approx(
-        avar_white(4.0 * var * tau, T), rel=1e-3)
+        avar_white(4.0 * var * tau, T), rel=1e-3, abs=0)
 
 
 def test_telegraph_monte_carlo_matches_closed_form():
@@ -58,7 +58,7 @@ def test_telegraph_monte_carlo_matches_closed_form():
     m_list = [20, 80, 320]                   # T = 1, 4, 16 tauA
     taus, avar = allan_variance(x, dt, m_list)
     expected = avar_exponential(var, tauA, taus)
-    assert np.allclose(avar, expected, rtol=0.12)
+    assert np.allclose(avar, expected, rtol=0.12, atol=0)
 
 
 def test_white_noise_matches_s0_over_2t():
@@ -68,7 +68,7 @@ def test_white_noise_matches_s0_over_2t():
     S0 = 2.0 * sig * sig * dt                # single-sided PSD of the samples
     m_list = [4, 16, 64]
     taus, avar = allan_variance(x, dt, m_list)
-    assert np.allclose(avar, avar_white(S0, taus), rtol=0.05)
+    assert np.allclose(avar, avar_white(S0, taus), rtol=0.05, atol=0)
 
 
 def test_input_validation():

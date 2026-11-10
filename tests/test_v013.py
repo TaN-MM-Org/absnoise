@@ -252,12 +252,12 @@ def test_theta_scalar_path_is_bit_identical():
 # ---- Matsubara-sum current-phase relation ---------------------------------------
 
 def test_chi2_function():
-    assert _chi2(1.0) == pytest.approx(np.pi ** 2 / 8, rel=1e-14)
+    assert _chi2(1.0) == pytest.approx(np.pi ** 2 / 8, rel=1e-14, abs=0)
     assert _chi2(0.0) == 0.0
     for z in (0.1, 0.5, 0.9):
         n = np.arange(400)
         ser = np.sum(z ** (2 * n + 1) / (2 * n + 1) ** 2)
-        assert _chi2(z) == pytest.approx(ser, rel=1e-13)
+        assert _chi2(z) == pytest.approx(ser, rel=1e-13, abs=0)
 
 
 @pytest.mark.parametrize("t", [0.027, 0.3, 0.9])
@@ -275,8 +275,8 @@ def test_matsubara_cpr_equals_short_junction_closed_form(t):
     assert np.max(np.abs(I - I_ref)) < 1e-9 * np.max(I_ref)
     a1, a3 = m.cpr_series(T)
     r1, r3 = _short_series(m.N, r.tau, D, T)
-    assert a1 == pytest.approx(r1, rel=1e-9)
-    assert a3 == pytest.approx(r3, rel=1e-8)
+    assert a1 == pytest.approx(r1, rel=1e-9, abs=0)
+    assert a3 == pytest.approx(r3, rel=1e-8, abs=0)
 
 
 def test_matsubara_cpr_matches_bound_plus_continuum_path():
@@ -296,11 +296,11 @@ def test_matsubara_cpr_matches_bound_plus_continuum_path():
     Iv = I_old[(m.phis > 0.25) & (m.phis < 1.2)]
     A = np.vstack([ph, ph ** 3, ph ** 5, ph ** 7]).T
     co = np.linalg.lstsq(A, Iv, rcond=None)[0]
-    assert co[0] == pytest.approx(a1, rel=3e-3)
+    assert co[0] == pytest.approx(a1, rel=3e-3, abs=0)
     # the series also reproduces the Matsubara current itself at small phi
     p = 1e-3
     assert m.cpr_matsubara(T, p) == pytest.approx(a1 * p + a3 * p ** 3,
-                                                  rel=1e-9)
+                                                  rel=1e-9, abs=0)
 
 
 def test_matsubara_terms_refusals():
@@ -319,7 +319,7 @@ def test_dIdphi0_is_exact_and_old_fit_was_wrong():
     D = float(gap_bcs(T, r.Tc, r.Delta))
     m.Delta = D
     ref, _ = _short_series(m.N, r.tau, D, T)
-    assert m.dIdphi0(T) == pytest.approx(ref, rel=1e-9)
+    assert m.dIdphi0(T) == pytest.approx(ref, rel=1e-9, abs=0)
     # the 0.12.1 computation: cubic through the first 8 points
     I = m.current_phase(T)
     p = np.polyfit(m.phis[:8], I[:8], 3)
@@ -336,8 +336,9 @@ def test_junction_properties_uses_exact_series():
     D = float(gap_bcs(T, r.Tc, r.Delta))
     N = JunctionModel(r).N
     a1, a3 = _short_series(N, r.tau, D, T)
-    assert out["dIdphi0"][1] == pytest.approx(out["scale"] * a1, rel=1e-9)
-    assert out["a3"][1] == pytest.approx(out["scale"] * a3, rel=1e-8)
+    assert out["dIdphi0"][1] == pytest.approx(out["scale"] * a1, rel=1e-9,
+                                              abs=0)
+    assert out["a3"][1] == pytest.approx(out["scale"] * a3, rel=1e-8, abs=0)
     # the 0.12.1 values (two-term fit over 0 < phi < 0.76 rad of the
     # 121-point current): a3 off by more than 1 %
     m = JunctionModel(r, n_phi=121)
@@ -379,7 +380,8 @@ def test_log_slopes_far_below_and_just_below_tc():
     assert sj.dlnIc_dT(T) == old
     # (the grid maximum of Ic makes the slope of a tiny step differ by
     # about 2e-4 from that of the 2e-3 Tc step)
-    assert sj.dlnIc_dT(T) == pytest.approx(_ref_dlnIc(r, T, 1e-4), rel=1e-3)
+    assert sj.dlnIc_dT(T) == pytest.approx(_ref_dlnIc(r, T, 1e-4), rel=1e-3,
+                                          abs=0)
     for bad in (0.0, -0.1, r.Tc, 1.2 * r.Tc, np.nan):
         with pytest.raises(ValueError):
             sj.dlnIc_dT(bad)
@@ -395,7 +397,7 @@ def test_sigma_spectrum_tiny_occupation_and_closed_form():
         assert S0 == pytest.approx(8 * f * (1 - f) / 2.0, rel=1e-12,
                                    abs=0.0)
         if 0 < f < 1:
-            assert te == pytest.approx(0.5, rel=1e-12)
+            assert te == pytest.approx(0.5, rel=1e-12, abs=0)
     with pytest.raises(AssertionError), np.errstate(all="ignore"):
         _sigma_spectrum_0121(1e-200, 2.0, 0.0, np.array([0.0]))
 
@@ -406,8 +408,8 @@ def test_sigma_spectrum_is_scale_covariant():
     for lam in (1e-20, 1e-15, 1e15):
         S, S0, v, t = sigma_spectrum(0.25, lam, lam, lam * om)
         assert np.allclose(S * lam, S1, rtol=1e-12, atol=0.0)
-        assert S0 * lam == pytest.approx(S01, rel=1e-12)
-        assert t * lam == pytest.approx(t1, rel=1e-12)
+        assert S0 * lam == pytest.approx(S01, rel=1e-12, abs=0)
+        assert t * lam == pytest.approx(t1, rel=1e-12, abs=0)
     assert _sigma_spectrum_0121(0.25, 1e-15, 1e-15, om)[1] == 0.0  # 0.12.1
 
 
@@ -419,7 +421,7 @@ def test_sigma_spectrum_agrees_with_0121_on_ordinary_inputs():
             b = _sigma_spectrum_0121(f, Gs, Gp, om)
             assert np.allclose(a[0], b[0], rtol=1e-12, atol=0.0)
             for x, y in zip(a[1:], b[1:]):
-                assert x == pytest.approx(y, rel=1e-12)
+                assert x == pytest.approx(y, rel=1e-12, abs=0)
     for bad in [(0.2, 0.0, 1.0), (0.2, -1.0, 0.0), (0.2, 1.0, -1.0),
                 (1.2, 1.0, 0.0), (0.2, np.inf, 0.0)]:
         with pytest.raises(ValueError):
@@ -487,14 +489,14 @@ def _heating(seed=0, noise=1e-3, Sigma=2.4, delta=3.0, Tp=0.05):
 def test_ep_fit_recovers_noise_free_parameters():
     P, Te0, _ = _heating()
     f = fit_ep_coupling(P, Te0, AREA, 0.05, sigma_Te=1e-3)
-    assert f.Sigma == pytest.approx(2.4, rel=1e-8)
-    assert f.delta == pytest.approx(3.0, rel=1e-8)
+    assert f.Sigma == pytest.approx(2.4, rel=1e-8, abs=0)
+    assert f.delta == pytest.approx(3.0, rel=1e-8, abs=0)
     g = fit_ep_coupling(P, Te0, AREA, 0.047, sigma_Te=1e-3, fit_Tp=True)
     assert (g.Sigma, g.delta, g.Tp) == pytest.approx((2.4, 3.0, 0.05),
-                                                     rel=1e-7)
+                                                     rel=1e-7, abs=0)
     h = fit_ep_coupling(P, Te0, AREA, 0.05, sigma_Te=1e-3, delta=3.0)
     assert h.names == ("Sigma",) and h.Sigma == pytest.approx(2.4,
-                                                              rel=1e-10)
+                                                              rel=1e-10, abs=0)
     # the model is the closed form of steady_temperature / ep_power
     assert np.allclose(ep_power(f.Te_fit, 0.05, AREA, f.Sigma, f.delta),
                        P, rtol=1e-6, atol=1e-30)
@@ -511,9 +513,9 @@ def test_ep_fit_matches_an_independent_optimizer():
         return float(np.sum(((model - Te) / s) ** 2))
     res = minimize(chi2, [2.0, 2.8], method="Nelder-Mead",
                    options=dict(xatol=1e-12, fatol=1e-14, maxiter=20000))
-    assert res.x[0] == pytest.approx(fit.Sigma, rel=1e-6)
-    assert res.x[1] == pytest.approx(fit.delta, rel=1e-6)
-    assert chi2(res.x) == pytest.approx(fit.chi2, rel=1e-8)
+    assert res.x[0] == pytest.approx(fit.Sigma, rel=1e-6, abs=0)
+    assert res.x[1] == pytest.approx(fit.delta, rel=1e-6, abs=0)
+    assert chi2(res.x) == pytest.approx(fit.chi2, rel=1e-8, abs=0)
 
 
 def test_ep_fit_error_bar_closed_form_for_one_parameter():
@@ -524,7 +526,7 @@ def test_ep_fit_error_bar_closed_form_for_one_parameter():
     Tm = ep_temperature(P, 0.05, AREA, fit.Sigma, 3.0)
     dT = -(1 / 3.0) * Tm ** (-2.0) * P / (fit.Sigma ** 2 * AREA)
     ref = 1.0 / np.sqrt(np.sum((dT / s) ** 2))
-    assert fit.sigma["Sigma"] == pytest.approx(ref, rel=1e-6)
+    assert fit.sigma["Sigma"] == pytest.approx(ref, rel=1e-6, abs=0)
 
 
 def test_ep_fit_error_bars_match_monte_carlo():
@@ -551,11 +553,11 @@ def test_ep_fit_conductance_matches_the_budget():
     r = dataclasses.replace(RECIPES[1], L=0.2e-6, W=2e-6)
     b = SensorBudget(r, sigma=fit.Sigma, delta=fit.delta)
     T = 0.2
-    assert fit.G(T) == pytest.approx(b.Gep(T), rel=1e-14)
+    assert fit.G(T) == pytest.approx(b.Gep(T), rel=1e-14, abs=0)
     h = 1e-6
     num = (ep_power(T + h, 0.05, AREA, fit.Sigma, fit.delta)
            - ep_power(T - h, 0.05, AREA, fit.Sigma, fit.delta)) / (2 * h)
-    assert fit.G(T) == pytest.approx(float(num), rel=1e-8)
+    assert fit.G(T) == pytest.approx(float(num), rel=1e-8, abs=0)
 
 
 def test_ep_propagate_linear_and_quadratic():
@@ -564,15 +566,15 @@ def test_ep_propagate_linear_and_quadratic():
     C = fit.cov
     out = fit.propagate(lambda s, d: 2.0 * s - 3.0 * d)
     ref = np.sqrt(4 * C[0, 0] + 9 * C[1, 1] - 12 * C[0, 1])
-    assert out["sigma"] == pytest.approx(ref, rel=1e-10)
+    assert out["sigma"] == pytest.approx(ref, rel=1e-10, abs=0)
     assert out["nonlinearity"] < 1e-6
     q = fit.propagate(lambda s, d: s * s)
     assert q["sigma"] == pytest.approx(2 * fit.Sigma * np.sqrt(C[0, 0]),
-                                       rel=1e-9)
+                                       rel=1e-9, abs=0)
     # with Tp fitted, the marginal (Sigma, delta) block is used
     g = fit_ep_coupling(P, Te, AREA, 0.05, sigma_Te=1e-3, fit_Tp=True)
     o = g.propagate(lambda s, d: d)
-    assert o["sigma"] == pytest.approx(g.sigma["delta"], rel=1e-10)
+    assert o["sigma"] == pytest.approx(g.sigma["delta"], rel=1e-10, abs=0)
     with pytest.raises(ValueError, match="nonlinear"):
         g.propagate(lambda s, d: np.exp(100 * (d - 3.0)))
 
@@ -661,8 +663,8 @@ def test_tutorial_detector_budget_prints_its_documented_result():
     _same_print(out, _docstring_output("tutorial_detector_budget.py"))
     # key result: sigma_E with both error contributions
     nums = [float(x) for x in _NUM.findall(out[-1])]
-    assert nums[0] == pytest.approx(1.998e-22, rel=1e-3)
-    assert nums[1] == pytest.approx(0.016e-22, rel=0.07)
+    assert nums[0] == pytest.approx(1.998e-22, rel=1e-3, abs=0)
+    assert nums[1] == pytest.approx(0.016e-22, rel=0.07, abs=0)
 
 
 def test_tutorial_readout_trace_prints_its_documented_result():

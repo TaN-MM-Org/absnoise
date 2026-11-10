@@ -74,7 +74,7 @@ def test_monte_carlo_matches_planned_tau_sigma():
         taus.append(fit.tau_s)
     assert failed <= 3                    # rare pathological draws only
     emp = np.std(taus, ddof=1)
-    assert np.isclose(emp, plan["sigma"]["tau_s"], rtol=0.2)
+    assert np.isclose(emp, plan["sigma"]["tau_s"], rtol=0.2, atol=0)
 
 
 def test_refusals_mirror_the_fit():

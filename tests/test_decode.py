@@ -20,8 +20,8 @@ def trace():
 def test_rates_roundtrip():
     hmm = TelegraphHMM.from_rates(F, TAU_A, DT, (0.0, 1.0), 0.2)
     f_back, tau_back = hmm.rates(DT)
-    assert np.isclose(f_back, F, rtol=1e-12)
-    assert np.isclose(tau_back, TAU_A, rtol=1e-12)
+    assert np.isclose(f_back, F, rtol=1e-12, atol=0)
+    assert np.isclose(tau_back, TAU_A, rtol=1e-12, atol=0)
 
 
 def test_high_snr_state_recovery(trace):
@@ -74,8 +74,8 @@ def test_forward_backward_posteriors_normalize(trace):
     y = (n + rng.normal(0, 0.4, N_STEPS))[:2000]
     hmm = TelegraphHMM.from_rates(F, TAU_A, DT, (0.0, 1.0), 0.4)
     gamma, xi, ll = hmm.forward_backward(y)
-    assert np.allclose(gamma.sum(axis=1), 1.0)
-    assert np.allclose(xi.sum(axis=(1, 2)), 1.0)
+    assert np.allclose(gamma.sum(axis=1), 1.0, atol=0)
+    assert np.allclose(xi.sum(axis=(1, 2)), 1.0, atol=0)
     assert np.isfinite(ll)
     # xi marginals agree with gamma
     assert np.allclose(xi.sum(axis=2), gamma[:-1], atol=1e-9)

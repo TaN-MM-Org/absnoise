@@ -30,7 +30,7 @@ def test_default_calibration_reproduces_the_measured_critical_current():
     exact_old = m.Ic_matsubara(0.02)
     s_new = m.calibrate()
     exact_new = m.Ic_matsubara(0.02)
-    assert exact_new == pytest.approx(r.Ic20, rel=1e-9)
+    assert exact_new == pytest.approx(r.Ic20, rel=1e-9, abs=0)
     assert exact_old / r.Ic20 == pytest.approx(0.98344, abs=2e-4)
     assert s_new / s_old == pytest.approx(1.01684, abs=2e-4)
 
@@ -44,4 +44,4 @@ def test_default_junction_table_is_the_exact_one():
         assert np.array_equal(np.asarray(default[k]), np.asarray(exact[k]))
     m = JunctionModel(r)                           # scale 1
     ic_exact = m.Ic_matsubara(0.02)
-    assert m.calibrate() == pytest.approx(r.Ic20 / ic_exact, rel=1e-12)
+    assert m.calibrate() == pytest.approx(r.Ic20 / ic_exact, rel=1e-12, abs=0)

@@ -165,9 +165,9 @@ def test_finite_length_sums_follow_the_branches_through_phi_zero(phi):
         R, S0, CA, ratio = _ratio_from_levels(E, E1, E2, T, which)
         s = fl.andreev_sums(phi, T, which)
         if which == "L":
-            assert s["R_occ"] == pytest.approx(R, rel=1e-6)
-            assert fl.saturation_ratio(phi, T, "L") == pytest.approx(ratio,
-                                                                     rel=1e-6)
+            assert s["R_occ"] == pytest.approx(R, rel=1e-6, abs=0)
+            assert fl.saturation_ratio(phi, T, "L") == pytest.approx(
+                ratio, rel=1e-6, abs=0)
             old = _ratio_from_levels(*_level_data_0130(fl, phi, T)[:3],
                                      T, "L")[3]
             assert old > 10 * ratio             # 0.13.0
@@ -176,8 +176,8 @@ def test_finite_length_sums_follow_the_branches_through_phi_zero(phi):
             # the noise sum does not
             assert abs(s["R_occ"] - R) <= 1e-6 * np.sum(np.abs(
                 (2 * E_CHARGE / HBAR) * E1 * E)) / (KB * T ** 2)
-            assert s["S0_over_tau"] == pytest.approx(S0, rel=1e-6)
-        assert s["C_A"] == pytest.approx(CA, rel=1e-12)
+            assert s["S0_over_tau"] == pytest.approx(S0, rel=1e-6, abs=0)
+        assert s["C_A"] == pytest.approx(CA, rel=1e-12, abs=0)
 
 
 def test_finite_length_full_recipe_near_zero_phase():
@@ -187,12 +187,12 @@ def test_finite_length_full_recipe_near_zero_phase():
     T = 0.3 * r.Tc
     new = fl.saturation_ratio(1e-4, T, "L")
     old = _ratio_from_levels(*_level_data_0130(fl, 1e-4, T)[:3], T, "L")[3]
-    assert old == pytest.approx(853.79, rel=1e-4)
+    assert old == pytest.approx(853.79, rel=1e-4, abs=0)
     assert new == pytest.approx(1.00747, abs=1e-5)
     # continuous with the old (correct) value just outside the stencil
     # (the ratio itself changes by 2e-8 between the two phases)
     assert new == pytest.approx(fl.saturation_ratio(1.1e-3, T, "L"),
-                                rel=1e-7)
+                                rel=1e-7, abs=0)
 
 
 @pytest.mark.parametrize("phi", [1e-3, 2e-3, 1.0, 3.0, -0.5])
@@ -230,7 +230,7 @@ def test_ic_matsubara_equals_the_closed_form_at_zero_length():
     u = (1 - np.sqrt(1 - tau)) / tau
     I0 = K * D * tau / 4 * 2 * np.sqrt(u * (1 - u)) / np.sqrt(1 - tau * u)
     Ic, phc = m.Ic_matsubara(0.02, return_phase=True)
-    assert Ic == pytest.approx(I0, rel=1e-9)
+    assert Ic == pytest.approx(I0, rel=1e-9, abs=0)
     assert phc == pytest.approx(2 * np.arcsin(np.sqrt(u)), abs=1e-6)
     # 0.5 Tc: the maximum of the closed-form current on 200001 phases
     # (grid error below 1e-10 relative)
@@ -239,7 +239,7 @@ def test_ic_matsubara_equals_the_closed_form_at_zero_length():
     ph = np.linspace(0.0, np.pi, 200001)
     E = D * np.sqrt(1 - tau * np.sin(ph / 2) ** 2)
     I = K * D * D * tau * np.sin(ph) / (4 * E) * np.tanh(E / (2 * KB * T))
-    assert m.Ic_matsubara(T) == pytest.approx(I.max(), rel=1e-9)
+    assert m.Ic_matsubara(T) == pytest.approx(I.max(), rel=1e-9, abs=0)
 
 
 def test_ic_matsubara_agrees_with_the_level_path_and_calibrates():
@@ -249,7 +249,7 @@ def test_ic_matsubara_agrees_with_the_level_path_and_calibrates():
     Ic_mat, phc = m.Ic_matsubara(0.02, return_phase=True)
     # two independent calculations of the same model (the level path
     # carries its energy and phase grid errors, about 5e-4)
-    assert Ic_mat == pytest.approx(Ic_lev, rel=2e-3)
+    assert Ic_mat == pytest.approx(Ic_lev, rel=2e-3, abs=0)
     assert abs(phc - m.phis[int(np.argmax(m.current_phase(0.02)))]) < 0.05
     # the exact maximum is at least as large as the Matsubara current
     # anywhere on a fine grid
@@ -258,8 +258,8 @@ def test_ic_matsubara_agrees_with_the_level_path_and_calibrates():
     s_lev = m.calibrate(method="levels")
     assert s_lev == r.Ic20 / Ic_lev                # the 0.14.0 default
     s_mat = m.calibrate(method="matsubara")
-    assert s_mat == pytest.approx(r.Ic20 / Ic_mat, rel=1e-12)
-    assert m.Ic_matsubara(0.02) == pytest.approx(r.Ic20, rel=1e-12)
+    assert s_mat == pytest.approx(r.Ic20 / Ic_mat, rel=1e-12, abs=0)
+    assert m.Ic_matsubara(0.02) == pytest.approx(r.Ic20, rel=1e-12, abs=0)
     with pytest.raises(ValueError):
         m.calibrate(method="exact")
     with pytest.raises(ValueError):
@@ -275,13 +275,15 @@ def test_junction_properties_matsubara_method():
     mat = junction_properties(r, T, method="matsubara")
     # the series terms differ only by the calibration scale
     k = mat["scale"] / lev["scale"]
-    assert mat["dIdphi0"][0] == pytest.approx(k * lev["dIdphi0"][0], rel=1e-12)
-    assert mat["a3"][0] == pytest.approx(k * lev["a3"][0], rel=1e-12)
+    assert mat["dIdphi0"][0] == pytest.approx(k * lev["dIdphi0"][0],
+                                              rel=1e-12, abs=0)
+    assert mat["a3"][0] == pytest.approx(k * lev["a3"][0], rel=1e-12, abs=0)
     m = JunctionModel(r)
     m.Delta = float(gap_bcs(0.225, r.Tc, r.Delta))
     m.scale = mat["scale"]
-    assert mat["Ic"][0] == pytest.approx(m.Ic_matsubara(0.225), rel=1e-12)
-    assert mat["Ic"][0] == pytest.approx(lev["Ic"][0], rel=3e-3)
+    assert mat["Ic"][0] == pytest.approx(m.Ic_matsubara(0.225), rel=1e-12,
+                                         abs=0)
+    assert mat["Ic"][0] == pytest.approx(lev["Ic"][0], rel=3e-3, abs=0)
     with pytest.raises(ValueError):
         junction_properties(r, T, method="grid")
 
@@ -310,16 +312,16 @@ def test_band_integral_matches_quadrature(abc, X):
     a, b, c = abc
     s = 1e9 if a < 1e-20 else 1.0            # x in units of 1e-9
     assert _quartic_band_integral(a, b, c, X * s) == pytest.approx(
-        _quad_band(a, b, c, X * s), rel=1e-10)
+        _quad_band(a, b, c, X * s), rel=1e-10, abs=0)
 
 
 def test_band_integral_unlimited_limit():
     for a, b, c in [(1.0, 3.0, 1.0), (1.0, 0.5, 1.0), (2.0, 1.0, 0.0)]:
         lim = _quartic_band_integral(a, b, c, np.inf)
         assert lim == pytest.approx(np.pi / (2 * np.sqrt(a) * np.sqrt(
-            b + 2 * np.sqrt(a * c))), rel=1e-15)
+            b + 2 * np.sqrt(a * c))), rel=1e-15, abs=0)
         assert _quartic_band_integral(a, b, c, 1e9) == pytest.approx(
-            lim, rel=1e-8)
+            lim, rel=1e-8, abs=0)
 
 
 @pytest.mark.parametrize("which", ["L", "I"])
@@ -342,7 +344,7 @@ def test_band_limited_resolution_matches_the_nep_integral(which, S_ro):
         ref = integ ** -0.5
         got = b.energy_resolution(T, tauA, S_ro_y=S_ro, which=which,
                                   f_max=fm)
-        assert got == pytest.approx(ref, rel=1e-8)
+        assert got == pytest.approx(ref, rel=1e-8, abs=0)
         assert got < prev
         prev = got
     assert prev > b.energy_resolution(T, tauA, S_ro_y=S_ro, which=which)
@@ -354,7 +356,7 @@ def test_band_limited_resolution_low_bandwidth_limit_and_grid_band():
     nep0 = b.nep_spectrum(T, tauA, np.array([0.0]))["total"][0]
     # sigma_E^-2 = 4 f_max / NEP(0)^2 for f_max far below every corner
     assert b.energy_resolution(T, tauA, f_max=1.0) == pytest.approx(
-        nep0 / np.sqrt(4.0), rel=1e-12)
+        nep0 / np.sqrt(4.0), rel=1e-12, abs=0)
     # the 0.10.x "grid" method integrates 4 / NEP^2 by the trapezoid
     # rule over [f_lo, f_hi]; the closed form over the same band is
     # sigma(f_hi)^-2 - sigma(f_lo)^-2 (trapezoid error on 6000 log
@@ -365,7 +367,7 @@ def test_band_limited_resolution_low_bandwidth_limit_and_grid_band():
     band = (b.energy_resolution(T, tauA, f_max=f_hi) ** -2
             - b.energy_resolution(T, tauA, f_max=f_lo) ** -2) ** -0.5
     assert b.energy_resolution(T, tauA, method="grid") == pytest.approx(
-        band, rel=1e-6)
+        band, rel=1e-6, abs=0)
 
 
 def test_bandwidth_for_resolution():
@@ -378,14 +380,14 @@ def test_bandwidth_for_resolution():
     for F in (1.01, 1.1, 2.0):
         ref = np.sqrt(a_ / b_) * np.tan(np.pi / (2 * F * F)) / (2 * np.pi)
         assert b.bandwidth_for_resolution(T, tauA, F) == pytest.approx(
-            ref, rel=1e-9)
+            ref, rel=1e-9, abs=0)
     # with a floor: the band-limited resolution at the answer, from
     # quadrature of the NEP, is F times the unlimited value
     S_ro = 3e-15
     fb = b.bandwidth_for_resolution(T, tauA, 1.1, S_ro_y=S_ro)
     assert b.energy_resolution(T, tauA, S_ro_y=S_ro, f_max=fb) == \
         pytest.approx(1.1 * b.energy_resolution(T, tauA, S_ro_y=S_ro),
-                      rel=1e-10)
+                      rel=1e-10, abs=0)
     for bad in (1.0, 0.5, np.nan):
         with pytest.raises(ValueError):
             b.bandwidth_for_resolution(T, tauA, bad)
@@ -403,7 +405,7 @@ def test_band_limited_refusals_and_budget_checks():
     with pytest.raises(ValueError):
         matched_filter_sigma(1.0, 0.0, 0.0, 1e-9, 1e-6)
     assert matched_filter_sigma(1.0, 0.0, 0.0, 1e-9, 1e-6, f_max=4.0) == \
-        pytest.approx(0.25, rel=1e-14)
+        pytest.approx(0.25, rel=1e-14, abs=0)
     for bad in [dict(sigma=0.0), dict(delta=-3), dict(L_r=0.0),
                 dict(nu_r=np.nan)]:
         with pytest.raises(ValueError):
@@ -487,4 +489,4 @@ def test_version_matches_pyproject():
     with open(path) as fh:
         line = next(ln for ln in fh if ln.startswith("version = "))
     import absnoise
-    assert line.split('"')[1] == absnoise.__version__ == "0.15.0"
+    assert line.split('"')[1] == absnoise.__version__ == "0.16.0"

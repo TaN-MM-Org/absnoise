@@ -320,7 +320,7 @@ def test_single_sample_trace():
     dens = np.exp(-0.5 * ((y[0] - hmm.means) / 0.4) ** 2) \
         / (np.sqrt(2 * np.pi) * 0.4)
     assert np.allclose(gamma[0], pi * dens / np.sum(pi * dens),
-                       rtol=1e-14)
+                       rtol=1e-14, atol=0)
     assert xi.shape == (0, 2, 2)
     assert abs(ll - np.log(np.sum(pi * dens))) < 1e-14
     assert hmm.viterbi(y)[0] == int(np.argmax(np.log(pi) + np.log(dens)))
@@ -465,4 +465,4 @@ def test_psd_single_sided_obeys_parseval(n):
     fr, S = psd_single_sided(x, dt)
     df = 1.0 / (n * dt)
     assert abs(np.sum(S) * df / np.var(x) - 1) < 1e-12
-    assert fr[1] - fr[0] == pytest.approx(df, rel=1e-12)
+    assert fr[1] - fr[0] == pytest.approx(df, rel=1e-12, abs=0)

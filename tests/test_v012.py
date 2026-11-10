@@ -84,9 +84,9 @@ def test_gap_below_099_tc_is_unchanged_and_continuous():
     # the main table is untouched below t = 0.99 (values of 0.11.0;
     # 1e-12 allows for rounding differences between SciPy versions)
     assert gap_bcs(0.5, 1.0, 1.0) == pytest.approx(0.9568871998163413,
-                                                   rel=1e-12)
+                                                   rel=1e-12, abs=0)
     assert gap_bcs(0.95, 1.0, 1.0) == pytest.approx(0.38036207931323796,
-                                                    rel=1e-12)
+                                                    rel=1e-12, abs=0)
     lo = gap_bcs(0.99 - 1e-12, 1.0, 1.0)
     hi = gap_bcs(0.99, 1.0, 1.0)
     assert abs(hi / lo - 1.0) < 1e-6
@@ -160,7 +160,7 @@ def test_avar_exponential_against_the_defining_integral(r):
     var, tau = 0.21, 1.7
     ref = _avar_reference(var, tau, r * tau)
     assert avar_exponential(var, tau, r * tau) == pytest.approx(
-        ref, rel=1e-9)
+        ref, rel=1e-9, abs=0)
 
 
 def test_avar_exponential_taylor_series_and_arrays():
@@ -168,7 +168,8 @@ def test_avar_exponential_taylor_series_and_arrays():
     #             = 2r^3/3 - r^4/2 + 7r^5/30 - r^6/12 + ...
     r = 1e-3
     ser = 2 * r / 3 - r ** 2 / 2 + 7 * r ** 3 / 30 - r ** 4 / 12
-    assert avar_exponential(1.0, 1.0, r) == pytest.approx(ser, rel=1e-12)
+    assert avar_exponential(1.0, 1.0, r) == pytest.approx(ser, rel=1e-12,
+                                                          abs=0)
     T = np.array([1e-7, 0.1, 0.4999, 0.5, 2.0, 40.0])
     out = avar_exponential(0.3, 1.0, T)
     assert out.shape == T.shape and np.all(out > 0.0)
@@ -286,14 +287,14 @@ def test_propagate_is_exact_for_linear_functions(example_fit):
     ref = np.sqrt(g @ fit.cov @ g)
     assert abs(out["sigma"] / ref - 1.0) < 1e-10
     assert out["value"] == pytest.approx(3 * fit.Tc - 2 * fit.tau,
-                                         rel=1e-14)
+                                         rel=1e-14, abs=0)
     assert out["nonlinearity"] < 1e-6
     # vector output: the fit's own error bars come back, with the
     # covariance block of (Tc, tau)
     v = fit.propagate(lambda r: np.array([r.Tc, r.tau]), **GEO)
     assert np.allclose(v["sigma"], [fit.sigma["Tc"], fit.sigma["tau"]],
-                       rtol=1e-10)
-    assert np.allclose(v["cov"], fit.cov[1:, 1:], rtol=1e-9)
+                       rtol=1e-10, atol=0)
+    assert np.allclose(v["cov"], fit.cov[1:, 1:], rtol=1e-9, atol=0)
 
 
 def test_propagate_quadratic_closed_form(example_fit):
@@ -321,7 +322,7 @@ def test_propagate_matches_monte_carlo(example_fit):
     # standard error of a 400-sample standard deviation: 3.5 %
     assert abs(np.std(vals, ddof=1) / out["sigma"] - 1.0) < 0.12
     assert out["value"] == pytest.approx(lj(fit.to_recipe("f", "f", **GEO)),
-                                         rel=1e-14)
+                                         rel=1e-14, abs=0)
 
 
 def test_propagate_refusals(example_fit):
