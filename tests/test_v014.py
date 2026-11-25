@@ -489,4 +489,4 @@ def test_version_matches_pyproject():
     with open(path) as fh:
         line = next(ln for ln in fh if ln.startswith("version = "))
     import absnoise
-    assert line.split('"')[1] == absnoise.__version__ == "0.16.0"
+    assert line.split('"')[1] == absnoise.__version__ == "0.17.0"

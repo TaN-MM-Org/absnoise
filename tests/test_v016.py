@@ -498,13 +498,14 @@ def test_sample_interval_must_be_finite_and_positive():
     assert tau_hat == pytest.approx(-1e-3 / np.log1p(-0.03), rel=1e-12, abs=0)
 
 
-def test_version_is_0_16_0():
+def test_version_agrees_with_citation():
+    """(0.16.0 checked its own number here; since 0.17.0 this test checks
+    that the package and CITATION.cff agree, and test_v017.py checks the
+    number.)"""
     import absnoise
-    assert absnoise.__version__ == "0.16.0"
     path = os.path.join(ROOT, "CITATION.cff")
     if not os.path.isfile(path):
         pytest.skip("CITATION.cff is not part of this tree")
     with open(path) as fh:
         text = fh.read()
-    assert "version: 0.16.0" in text
-    assert "date-released: 2026-11-10" in text
+    assert f"version: {absnoise.__version__}\n" in text
