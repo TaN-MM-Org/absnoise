@@ -1,5 +1,191 @@
 # Changelog
 
+## 0.17.0 (2026-11-25)
+
+Spectra of averaging readouts and of finite records, a readout noise
+width per state in the decoder, a second check in the Markov dwell
+test, the best subset of temperatures, the heater calibration in the
+cooling-law fit, error bars for the click Monte Carlo, much faster
+Matsubara sums at low temperature, and input checks where 0.16.0 gave
+silent nonsense. No function was renamed or removed, and README
+Examples 1 to 15 and the tutorials print the same output as with
+0.16.0.
+
+### Added
+
+- `sampling="average"` in `telegraph_psd_model`, `fit_telegraph_psd`,
+  `plan_psd_measurement`, `averages_for_tau` and `avar_exponential`
+  (default "instant", the 0.16.0 behavior): samples that are the mean
+  of the signal over their own interval. Spectrum
+  S(f) = S0 ((1 - r)^2 - s q / eps) / ((1 - r)^2 + 4 r s) + floor,
+  s = sin^2(pi f dt), q = 4 r (sinh(eps) - eps), eps = dt/tau,
+  r = exp(-eps) (q as a series below eps = 1); it is the Lorentzian
+  times sinc^2(pi f dt) summed over all aliases. The Allan variance of
+  such samples is the continuous-time closed form, exactly. On exactly
+  averaged telegraph records at dt = tau/4 the instantaneous model put
+  tau 57 % long. Lifts the README limit "a readout that averages over
+  each sample interval ... has a different spectrum, which neither
+  model describes". README Example 16.
+- `n_record` in the same spectrum functions: the exact expected value
+  of `psd_single_sided` of a record of n_record samples at its bins
+  0 < j < n_record/2, E[S_j] = 2 dt [C(0) + 2 sum_{h<N} (1 - h/N) C(h)
+  cos(2 pi j h / N)], in closed form, for both samplings. Short
+  records (128 samples, 15 tau): without it tau came out 5.9 % short
+  (2.9 error bars) in the tests. Even 1024-sample records of 256 tau
+  at 32 averages: 0.22 (instantaneous) and 0.40 (averaged) error bars
+  low on average. Lifts the README limit "for a record not much longer
+  than tau, the lowest bins are also smoothed by the finite record
+  length". README Example 16.
+- `n_avg` as an array, one value per point, in `fit_telegraph_psd` and
+  `plan_psd_measurement`: each point gets its own offset
+  psi(n_i) - ln n_i and weight 1/psi'(n_i). Lifts the README limit
+  "n_avg, one number for all points". README Example 17.
+- `TelegraphHMM(p_up, p_dn, means, sigma=(s0, s1))` and
+  `fit_hmm(..., equal_noise=False)`: one Gaussian readout width per
+  state, with the exact gradient (`score`) and the 6 x 6 error bars
+  (`uncertainties`, keys 'sigma0' and 'sigma1'). New attributes
+  `sigmas` (always the pair) and `equal_noise`. With widths 0.2 and
+  0.45, the one-width fit put tau 37 % short (16 traces). Lifts the
+  README limit "fit_hmm models Gaussian readout noise with the same
+  width in both states". README Example 18.
+- `markov_dwell_test` returns `correlation`, the rank correlation of
+  each complete stay with the next (ranked within its own state), and
+  `p_correlation`, its two-sided p-value from the same simulated
+  traces. `p_value` is unchanged (the dispersion test alone). Lifts
+  the README limit "not, for example, a correlation between successive
+  stays". README Example 18.
+- `design_ic_temperatures(..., method="exhaustive")`: the subset with
+  the largest determinant of the information matrix, by checking every
+  subset (refused above 2 000 000 subsets); both methods now also
+  return `log_det`. For README Example 4 the best subset has a 0.50 %
+  larger determinant than the greedy one. README Example 19.
+- `fit_ep_coupling(..., power_scale_error=0.0)`: the relative
+  uncertainty of the heater calibration. The model depends on
+  P / Sigma only, so it adds (Sigma * power_scale_error)^2 to the
+  variance of Sigma and nothing to delta or Tp. New field
+  `EPCouplingFit.power_scale_error`. README Example 20.
+- `click_monte_carlo` returns `efficiency_err`, `dark_fraction_err`
+  (binomial, sqrt(p (1 - p) / n_trials)) and `snr_err`
+  (sqrt((2 + snr^2 / 4) / (n_trials - 1)), first order). README
+  Example 20.
+- `TelegraphPSDFit` has two new last fields, `sampling` and
+  `n_record`.
+
+### Changed
+
+- `SensorBudget.freq_noise_spectrum` refuses negative or non-finite
+  frequencies, as `nep_spectrum` does (a negative frequency returned
+  the value at |f| before).
+- `tau_activated` returns a Python float for scalar input (a NumPy
+  float before) and checks its inputs (see Fixed).
+- `telegraph_traces` refuses a number of steps or channels that is not
+  a whole number (2.7 steps gave 2 before).
+- `matched_Tc` refuses a ratio outside the range its search can reach,
+  with that range in the message.
+- tests/test_v016.py: `test_version_is_0_16_0` became
+  `test_version_agrees_with_citation` (version-independent); the
+  0.17.0 number is checked in tests/test_v017.py. tests/test_v014.py
+  checks the new version number.
+
+### Fixed
+
+- `allan_variance(x, dt, m_list=[2.5])` used m = 2 and reported it at
+  2 dt (NumPy cut the window to an integer). Refused now.
+- `ic_model` with tau = 1.2 or tau = 0, or a negative temperature,
+  returned NaN (with a RuntimeWarning at most); `gap_bcs` with a
+  negative temperature returned NaN; `steady_temperature` with a
+  negative bath temperature returned NaN; `avar_white` returned NaN for
+  a NaN input. All refused now.
+- `noneq_penalty(0.0, 0.3)` returned 4.58e149 (division by its floor
+  1e-300) and `noneq_penalty(0.2, 1.3)` returned 0; f must now lie in
+  (0, 1) and q in [0, 1]. `tau_activated` at T = 0 raised
+  ZeroDivisionError. `channel_generator` built a matrix with negative
+  rates from a negative rate; it now checks its inputs as
+  `sigma_spectrum` does.
+- `TelegraphHMM(..., sigma=nan)` was accepted, and every later call
+  failed with "the trace contains non-finite samples". A NaN width or
+  level is refused when the model is built.
+- `click_template` with dt < 0 skipped its first stage without notice
+  (361 points from the second stage only, in the test case) and with
+  dt = 0 raised ZeroDivisionError; `two_temperature_click` raised
+  ZeroDivisionError for dt = 0 and "negative dimensions are not
+  allowed" for dt < 0; `click_monte_carlo` with n_trials = 1 returned
+  snr = inf. All refused with a plain message now.
+- `matched_Tc(0.05, ratio=20)` stopped with SciPy's "f(a) and f(b)
+  must have different signs"; now it says that the ratio must lie
+  between 0.3068 (Tc = 1.01 T0) and 10.58 (Tc = 6 T0) at 50 mK.
+- `save_trace_csv` wrote `nan` and `save_ic_csv` wrote non-finite
+  values and decreasing temperatures, files that `load_trace_csv` and
+  `load_ic_csv` refuse. Both refuse such data now.
+- `SensorBudget.freq_noise_spectrum(T, tauA, [0.0, 1e6])` raised
+  TypeError (a list times a float); it now takes any array-like.
+
+### Performance
+
+- Matsubara sums (`matsubara_free_energy_terms`, and so
+  `JunctionModel.cpr_matsubara`, `cpr_series`, `Ic_matsubara`,
+  `calibrate` and `junction_properties`): the terms are added one by
+  one only up to 20 times the gap (at least 200 terms); the rest of
+  the same sum, up to 2000 times the gap as before, is integrated by
+  16-point Gauss-Legendre rules with the first Euler-Maclaurin
+  correction (midpoint form). When there are at most 4 times as many
+  terms as that head (high temperature) the sum is the 0.16.0 one,
+  unchanged. Agreement with the full sum: 1.9e-12 at 0.0027 Tc, below
+  1e-13 from 0.01 Tc (both sums differ from an 80-bit sum by up to
+  2.1e-12). `calibrate()` at 20 mK, median of 3 on a shared machine:
+  Ta/Ti/Au 1.49 s -> 0.18 s, Ti/Al/Au 0.47 -> 0.06, Ti/Al(thin)
+  1.32 -> 0.08, Ti/Al(thick) 2.36 -> 0.11, Ti/Nb/NbN 2.77 -> 0.06, MoRe
+  8.93 -> 0.13; the scales agree to 9 digits. `Ic_matsubara(0.02)`:
+  Ti/Al/Au 0.83 s -> 0.05 s, MoRe 7.5 s -> 0.19 s.
+
+### Not included
+
+- An error bar for a measured Allan variance: an exact one needs the
+  fourth moments of the process, and the telegraph signal of a few
+  channels is far from Gaussian, so the Gaussian formula would give
+  error bars of unknown quality.
+- A scatter of the heater power from point to point in
+  `fit_ep_coupling` (an errors-in-variables fit); only a common
+  calibration factor is handled.
+- Leakage of tapered or overlapping segments (Welch's method with a
+  window); `n_record` covers the rectangular segments of
+  `psd_single_sided`. Readout filters other than the plain average over
+  the sample interval: their shape belongs to the device.
+- The correlation between neighboring bins of a short record: the fit
+  still treats bins as independent, and its error bars were about 30 %
+  too large for 128-sample records of 15 tau in the tests.
+- `gap_bcs` keeps Delta0 / (kB Tc) = 1.7639 near Tc (README Limits),
+  so that results below 0.99 Tc stay as in earlier releases.
+- Every other limit in the README Limits section stands as stated
+  there (tauA as input, the short-junction readout of `SensorBudget`,
+  continuum occupation noise, a lumped phonon bath, first-order error
+  propagation).
+
+### Checks (tests)
+
+- New tests/test_v017.py (54 tests, about 20 s): the Matsubara tail
+  against the 0.16.0 full sum (kept in the test; 3e-12, measured
+  1.9e-12) and the MoRe current at 20 mK (1e-12, measured 2.4e-14);
+  the averaged spectrum against the sinc^2 alias sum (1e-13, measured
+  1e-15), the transform of the autocovariance from numerical
+  integration (1e-11, measured 5e-13), Parseval (1e-10) and the
+  continuous limit; the averaged Allan variance against the 50-digit
+  double sum (1e-12, measured 3e-16); fits on exactly averaged telegraph
+  Monte Carlo (40 records: mean errors -0.09 and 0.03 error bars,
+  chi2/dof 1.013); the finite-record spectrum against the quadratic
+  form of the full covariance matrix (3e-12, measured 1.8e-12), the
+  long-record limit, 12 000 simulated periodograms and fits on 30
+  telegraph records and on Gamma-scatter spectra; the per-point n_avg
+  against the scalar fit (1e-7) and on 300 Gamma-scatter spectra; the
+  two-width decoder (likelihood with equal widths, gradient against
+  finite differences 1e-5 (measured 3e-9), batched Viterbi, 16 fitted
+  traces); the successive-stay correlation by hand and on linked and
+  Markov traces; the exhaustive design against a brute-force loop; the
+  heater calibration (exact scaling 1e-8, measured 3e-9; 150 Monte
+  Carlo curves, measured 4 %); the click Monte Carlo errors against 24
+  seeds (measured within 8 %); one regression test for each fix above.
+- 351 tests in total (297 in 0.16.0).
+
 ## 0.16.0 (2026-11-10)
 
 The noise spectrum and the Allan variance of sampled data, five
@@ -611,7 +797,7 @@ the readout-trace decoder.
 - The decode module docstring promised likelihood-based error bars
   that the module did not compute.
 
-### Behaviour changes (before -> after)
+### Behavior changes (before -> after)
 
 - Energy resolution, Ti/Al/Au at 0.3 Tc (README Example 1,
   tauA = 1 us): 1.810e-22 J -> 1.752e-22 J (-3.2 %); with
