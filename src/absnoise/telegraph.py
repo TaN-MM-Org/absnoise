@@ -49,9 +49,13 @@ def telegraph_traces(f: float, tauA: float, dt: float, n_steps: int,
     """Markov two-state occupations, shape (n_steps, n_channels),
     sampled exactly every dt (see the module docstring)."""
     p_up, p_dn = flip_probabilities(f, tauA, dt)
+    # (changed in 0.17.0) a count that is not a whole number is refused;
+    # up to 0.16.0 int() cut it (n_steps = 2.7 gave 2 steps)
+    for name, val in (("n_steps", n_steps), ("n_channels", n_channels)):
+        v = float(val)
+        if not (np.isfinite(v) and v == np.floor(v) and v >= 1):
+            raise ValueError(f"{name} must be a whole number >= 1")
     n_steps, n_channels = int(n_steps), int(n_channels)
-    if n_steps < 1 or n_channels < 1:
-        raise ValueError("n_steps and n_channels must be >= 1")
     n = rng.random(n_channels) < f
     out = np.empty((n_steps, n_channels), dtype=np.int8)
     # Vectorized in time (0.13.0), with the same random numbers and the

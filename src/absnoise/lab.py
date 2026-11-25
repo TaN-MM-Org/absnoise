@@ -13,7 +13,8 @@ weighted-least-squares covariance (J^T W J)^-1 -- the same matrix
 before any data exist (the Fisher information of independent Gaussian
 measurements; any statistics text, under "Cramer-Rao bound"). The
 temperature-design tool maximizes its determinant (D-optimal design;
-F. Pukelsheim, Optimal Design of Experiments, SIAM (2006)). The PSD
+F. Pukelsheim, Optimal Design of Experiments, SIAM (2006)), greedily
+or (new in 0.17.0) by checking every subset. The PSD
 band planner contains no statistics at all: it applies, in advance,
 exactly the acceptance rules `fit_telegraph_psd` enforces after the
 fact, so a band it approves is one the fit will accept.
@@ -117,18 +118,33 @@ def plan_ic_measurement(T_K, sigma_Ic_A, Ic0, Tc, tau, n_phi=601):
             "covers_tc_knee": bool(float(T.max()) >= 0.3 * float(Tc))}
 
 
+_MAX_SUBSETS = 2_000_000
+
+
 def design_ic_temperatures(candidates_K, n_pick, sigma_Ic_A, Ic0, Tc,
-                           tau, n_phi=601):
+                           tau, n_phi=601, method="greedy"):
     """Pick the most informative temperatures to measure.
 
-    Greedy D-optimal selection from the reachable candidate
-    temperatures: each pick most increases the determinant of the
-    information matrix. Transparent and monotone, but a good-practice
-    heuristic, not a proof of the globally best subset.
+    method="greedy" (the default): greedy D-optimal selection from the
+    reachable candidate temperatures: each pick most increases the
+    determinant of the information matrix. Transparent and monotone,
+    but a good-practice heuristic, not a proof of the globally best
+    subset.
 
-    Returns dict(indices, condition_number, sigma) with the chosen
-    candidate indices in pick order and the planned error bars of the
-    chosen set. Refuses when even the full candidate list cannot
+    method="exhaustive" (new in 0.17.0): the determinant is computed
+    for every subset of n_pick candidates, and the largest is taken,
+    so the result is the best subset (the D-optimal one) for this
+    model and these errors. It is refused when there are more than
+    2 000 000 subsets (n choose n_pick); the 15 candidates and 5 picks
+    of README Example 4 make 3003. The indices are then in increasing
+    order.
+
+    Returns dict(indices, condition_number, sigma, log_det) with the
+    chosen candidate indices in pick order, the planned error bars of
+    the chosen set and (new in 0.17.0) the natural log of the
+    determinant of its information matrix J^T W J in SI units, the
+    quantity both methods maximize (compare two designs by the
+    difference). Refuses when even the full candidate list cannot
     identify (Ic0, Tc, tau).
     """
     _check_point(Ic0, Tc, tau)
@@ -144,6 +160,16 @@ def design_ic_temperatures(candidates_K, n_pick, sigma_Ic_A, Ic0, Tc,
                           T.shape).copy()
     if np.any(sig <= 0.0) or not np.all(np.isfinite(sig)):
         raise ValueError("sigma_Ic_A must be finite and positive")
+    if method not in ("greedy", "exhaustive"):
+        raise ValueError("method must be 'greedy' or 'exhaustive'")
+    if method == "exhaustive":
+        from math import comb
+        n_sub = comb(n, n_pick)
+        if n_sub > _MAX_SUBSETS:
+            raise ValueError(
+                f"{n_sub} subsets of {n_pick} among {n} candidates is "
+                f"more than {_MAX_SUBSETS} to check one by one; use "
+                "method='greedy' or fewer candidates")
     full = plan_ic_measurement(T, sig, Ic0, Tc, tau, n_phi)
     if not full["identifiable"]:
         raise ValueError(
@@ -155,6 +181,14 @@ def design_ic_temperatures(candidates_K, n_pick, sigma_Ic_A, Ic0, Tc,
     # choices unchanged but keeps the start-up regularizer meaningful
     scale = np.sqrt(np.mean(rows * rows, axis=0))
     rs = rows / scale
+    if method == "exhaustive":
+        chosen = _best_subset(rs, n_pick)
+        sub = plan_ic_measurement(T[chosen], sig[chosen], Ic0, Tc, tau,
+                                  n_phi)
+        return {"indices": list(chosen),
+                "condition_number": sub["condition_number"],
+                "sigma": sub["sigma"],
+                "log_det": _log_det(rows[chosen])}
     eps = 1e-12 * float(np.max(np.sum(rs * rs, axis=1)))
     fs = eps * np.eye(3)
     chosen = []
@@ -173,7 +207,37 @@ def design_ic_temperatures(candidates_K, n_pick, sigma_Ic_A, Ic0, Tc,
                               n_phi)
     return {"indices": list(chosen),
             "condition_number": sub["condition_number"],
-            "sigma": sub["sigma"]}
+            "sigma": sub["sigma"],
+            "log_det": _log_det(rows[chosen])}
+
+
+def _log_det(rows):
+    """ln det of sum r r^T over the rows (the information matrix of
+    the chosen temperatures, SI units)."""
+    sign, ld = np.linalg.slogdet(rows.T @ rows)
+    return float(ld) if sign > 0 else float("-inf")
+
+
+def _best_subset(rs, k):
+    """Indices of the k rows of rs (n x 3) whose information matrix
+    sum r r^T has the largest determinant, by checking every subset
+    (new in 0.17.0). The subsets are taken in blocks of 100 000, and
+    the 3 x 3 determinants of a block are computed at once
+    (numpy.linalg.det on the stack of summed matrices)."""
+    from itertools import combinations, islice
+    outer = np.einsum("ni,nj->nij", rs, rs).reshape(rs.shape[0], 9)
+    best_det, best = -np.inf, None
+    it = combinations(range(rs.shape[0]), k)
+    while True:
+        block = np.array(list(islice(it, 100_000)), dtype=np.intp)
+        if block.size == 0:
+            break
+        M = outer[block].sum(axis=1).reshape(-1, 3, 3)
+        det = np.linalg.det(M)
+        j = int(np.argmax(det))
+        if det[j] > best_det:
+            best_det, best = float(det[j]), block[j]
+    return [int(i) for i in best]
 
 
 def psd_band_for_tau(tau_expected_s, margin=4.0):
@@ -207,10 +271,12 @@ def psd_band_for_tau(tau_expected_s, margin=4.0):
     return f_c / m, f_c * m, f_c
 
 
-def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt=None):
+def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt=None,
+                      sampling="instant", n_record=None):
     """d log(model) / d log(parameter) at the working point -- the
     same log-space parameterization `fit_telegraph_psd` uses (and the
-    same model: with dt, the spectrum of the sampled process)."""
+    same model: with dt, the spectrum of the sampled process, with the
+    sampling and record length of the fit)."""
     from .psdfit import telegraph_psd_model
     f = np.asarray(f, dtype=float).ravel()
     p0 = [np.log(S0), np.log(tau_s)] \
@@ -219,7 +285,8 @@ def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt=None):
     def logmodel(p):
         s0, tau = np.exp(p[0]), np.exp(p[1])
         fl = np.exp(p[2]) if fit_floor else floor
-        return np.log(telegraph_psd_model(f, s0, tau, fl, dt))
+        return np.log(telegraph_psd_model(f, s0, tau, fl, dt, sampling,
+                                          n_record))
 
     jac = np.empty((f.size, len(p0)))
     for j in range(len(p0)):
@@ -233,7 +300,8 @@ def _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt=None):
 
 def plan_psd_measurement(f_hz, n_avg: float, S0: float, tau_s: float,
                          floor: float = 0.0, fit_floor: bool = True,
-                         dt: float | None = None) -> dict:
+                         dt: float | None = None, sampling: str = "instant",
+                         n_record: int | None = None) -> dict:
     """Predicted PSD-fit error bars for a planned averaging depth.
 
     f_hz : the frequency bins you will record (must satisfy the same
@@ -257,18 +325,39 @@ def plan_psd_measurement(f_hz, n_avg: float, S0: float, tau_s: float,
     dt=dt)` of a spectrum of a trace sampled every dt, with the
     sampled-process model (aliasing included); the frequencies must
     then lie in (0, 1/(2 dt)], as the fit requires.
+
+    sampling, n_record (new in 0.17.0): plan the fit with the same
+    options of `fit_telegraph_psd` (a readout that averages over each
+    sample interval; the expected periodogram of segments of n_record
+    samples). n_avg may also be an array with one value per frequency,
+    as in the fit (new in 0.17.0); each point then has log-variance
+    psi'(n_i).
     """
-    _check_psd_point(f_hz, S0, tau_s, floor, dt)
-    # an effective, non-integer n_avg is accepted, as `fit_telegraph_psd`
-    # accepts it (fixed in 0.12.0: int() truncated it, so n_avg = 1.5
-    # was planned as 1)
-    n_avg = float(n_avg)
-    if not (np.isfinite(n_avg) and n_avg >= 1.0):
-        raise ValueError("n_avg must be finite and >= 1 (the number of "
-                         "averaged periodograms behind each bin)")
+    dt, sampling, n_record = _check_psd_point(f_hz, S0, tau_s, floor, dt,
+                                              sampling, n_record)
     f = np.asarray(f_hz, dtype=float).ravel()
-    jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt)
-    fisher = jac.T @ jac / _log_var(n_avg)
+    if np.ndim(n_avg) > 0:
+        n_arr = np.asarray(n_avg, dtype=float).ravel()
+        if n_arr.size != f.size:
+            raise ValueError("an array n_avg needs one value per frequency")
+        if not (np.all(np.isfinite(n_arr)) and np.all(n_arr >= 1.0)):
+            raise ValueError("every n_avg must be finite and >= 1")
+        from scipy.special import polygamma
+        inv_var = 1.0 / polygamma(1, n_arr)
+        jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt,
+                                sampling, n_record)
+        fisher = (jac * inv_var[:, None]).T @ jac
+    else:
+        # an effective, non-integer n_avg is accepted, as
+        # `fit_telegraph_psd` accepts it (fixed in 0.12.0: int()
+        # truncated it, so n_avg = 1.5 was planned as 1)
+        n_avg = float(n_avg)
+        if not (np.isfinite(n_avg) and n_avg >= 1.0):
+            raise ValueError("n_avg must be finite and >= 1 (the number "
+                             "of averaged periodograms behind each bin)")
+        jac = _psd_log_jacobian(f, S0, tau_s, floor, fit_floor, dt,
+                                sampling, n_record)
+        fisher = jac.T @ jac / _log_var(n_avg)
     names = ["S0", "tau_s"] + (["floor"] if fit_floor else [])
     identifiable, cond, sig_frac = _invert_information(fisher, names)
     sigma = None
@@ -288,7 +377,8 @@ def _log_var(n_avg):
 
 
 def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
-                     fit_floor=True, dt=None):
+                     fit_floor=True, dt=None, sampling="instant",
+                     n_record=None):
     """How many periodogram averages does a target tau error bar
     cost? Every error bar scales as sqrt(psi'(n_avg)) (see
     `plan_psd_measurement`), so this returns the smallest integer
@@ -299,14 +389,14 @@ def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
 
     Returns (n_avg, plan) with `plan` the `plan_psd_measurement`
     result at the returned depth. Refuses bands the fit itself would
-    refuse, with the same explanation. dt (new in 0.16.0): as in
-    `plan_psd_measurement`.
+    refuse, with the same explanation. dt (new in 0.16.0), sampling and
+    n_record (new in 0.17.0): as in `plan_psd_measurement`.
     """
     t = float(target_sigma_tau_s)
     if not (np.isfinite(t) and t > 0.0):
         raise ValueError("target_sigma_tau_s must be positive (s)")
     base = plan_psd_measurement(f_hz, 1, S0, tau_s, floor, fit_floor,
-                                dt)
+                                dt, sampling, n_record)
     if not base["identifiable"]:
         raise ValueError("the band cannot determine the parameters "
                          "at any averaging depth; change the band "
@@ -320,11 +410,12 @@ def averages_for_tau(target_sigma_tau_s, f_hz, S0, tau_s, floor=0.0,
     while _log_var(n) > q:
         n += 1
     return n, plan_psd_measurement(f_hz, n, S0, tau_s, floor,
-                                   fit_floor, dt)
+                                   fit_floor, dt, sampling, n_record)
 
 
-def _check_psd_point(f_hz, S0, tau_s, floor, dt=None):
-    from .psdfit import telegraph_psd_model
+def _check_psd_point(f_hz, S0, tau_s, floor, dt=None, sampling="instant",
+                     n_record=None):
+    from .psdfit import _bin_index, _check_sampling, telegraph_psd_model
     f = np.asarray(f_hz, dtype=float).ravel()
     if f.size < 8 or np.any(f <= 0.0) or not np.all(np.isfinite(f)):
         raise ValueError("need >= 8 positive, finite frequencies "
@@ -342,6 +433,9 @@ def _check_psd_point(f_hz, S0, tau_s, floor, dt=None):
                 f"frequency {f.max():.6g} Hz lies above the Nyquist "
                 f"frequency 1/(2 dt) = {0.5 / dt:.6g} Hz: the fit "
                 "would refuse it")
+    dt, sampling, n_record = _check_sampling(dt, sampling, n_record)
+    if n_record is not None:
+        _bin_index(f, dt, n_record)
     f_knee = 1.0 / (2.0 * np.pi * tau_s)
     if f_knee < 2.0 * f.min() or f_knee > 0.5 * f.max():
         raise ValueError(
@@ -350,9 +444,10 @@ def _check_psd_point(f_hz, S0, tau_s, floor, dt=None):
             "the fit's factor-2 margin: `fit_telegraph_psd` would "
             "refuse this measurement, so it is refused here, before "
             "the fridge time (see psd_band_for_tau)")
-    S = telegraph_psd_model(f, S0, tau_s, floor, dt)
+    S = telegraph_psd_model(f, S0, tau_s, floor, dt, sampling, n_record)
     if float(S.max() / S.min()) < 4.0:
         raise ValueError(
             "the expected spectrum varies by less than a factor of 4 "
             "across the band: the fit's knee-visibility rule would "
             "refuse it, so it is refused here, in advance")
+    return dt, sampling, n_record

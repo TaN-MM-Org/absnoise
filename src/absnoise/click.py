@@ -51,9 +51,20 @@ def matched_Tc(T0, ratio=MATCHED_RATIO):
     T0 = float(T0)
     if not (np.isfinite(T0) and T0 > 0.0):
         raise ValueError("T0 must be finite and positive (K)")
+    ratio = float(ratio)
 
     def g(Tc):
         return gap_bcs(T0, Tc, BCS_RATIO * KB * Tc) - ratio * KB * T0
+    # (changed in 0.17.0) a ratio outside the searched range of Tc,
+    # 1.01 T0 to 6 T0, is refused with that range; up to 0.16.0 brentq
+    # stopped with "f(a) and f(b) must have different signs"
+    r_lo = gap_bcs(T0, 1.01 * T0, BCS_RATIO * KB * 1.01 * T0) / (KB * T0)
+    r_hi = gap_bcs(T0, 6.0 * T0, BCS_RATIO * KB * 6.0 * T0) / (KB * T0)
+    if not (r_lo < ratio < r_hi):
+        raise ValueError(
+            f"ratio = Delta*(T0) / kB T0 must lie between {r_lo:.4g} "
+            f"(Tc = 1.01 T0) and {r_hi:.4g} (Tc = 6 T0), the range "
+            f"searched for Tc; got {ratio!r}")
     return float(brentq(g, T0 * 1.01, T0 * 6.0))
 
 
@@ -98,6 +109,17 @@ def click_template(budget, E_gamma: float, tauA: float, T0: float,
         dt2 = min(2e-8, tauA / 6.0)
     if t_end2 is None:
         t_end2 = 60.0 * tauA
+    # (fixed in 0.17.0) the time grid is checked: up to 0.16.0 a
+    # negative dt silently skipped the first stage and dt = 0 raised
+    # ZeroDivisionError
+    for name, val in (("dt", dt), ("dt2", dt2)):
+        if not (np.isfinite(float(val)) and float(val) > 0.0):
+            raise ValueError(f"{name} must be finite and positive (s)")
+    for name, val in (("t_end", t_end), ("t_end2", t_end2)):
+        if not (np.isfinite(float(val)) and float(val) >= 0.0):
+            raise ValueError(f"{name} must be finite and >= 0 (s)")
+    dt, dt2 = float(dt), float(dt2)
+    t_end, t_end2 = float(t_end), float(t_end2)
     sj = budget.sj
     A = budget.recipe.area
     gam = budget.Ce(T0) / T0                # C_e = gamma T
@@ -152,8 +174,36 @@ def click_monte_carlo(budget, E_gamma, tauA, T0, scenario="C",
     Returns dict(efficiency, dark_fraction, snr, m_dip, ...). The
     numbers are statistics-limited; the test suite asserts ordering
     relations (efficiency above dark fraction, positive SNR), not tight
-    values."""
+    values.
+
+    Since 0.17.0 the result also holds the standard errors of the three
+    statistics: `efficiency_err` and `dark_fraction_err` are the
+    binomial errors sqrt(p (1 - p) / n_trials) of a fraction of
+    n_trials independent records, and `snr_err` is
+    sqrt((2 + snr^2 / 4) / (n - 1)) with n = n_trials: the first-order
+    error of a difference of two means of n Gaussian scores divided by
+    their pooled standard deviation (the scores are linear in the
+    Gaussian noise of the records; each sample variance, taken with
+    divisor n, has variance 2 (n - 1) s^4 / n^2 for scores of standard
+    deviation s). The tests compare all three with the scatter over
+    independent seeds. n_trials must be at least 2, and dt, the
+    threshold and S_ro_nu are checked (up to 0.16.0 n_trials = 1
+    returned snr = inf)."""
     from scipy.signal import lfilter
+
+    n_trials = float(n_trials)
+    if not (np.isfinite(n_trials) and n_trials == np.floor(n_trials)
+            and n_trials >= 2):
+        raise ValueError("n_trials must be a whole number >= 2")
+    n_trials = int(n_trials)
+    dt = float(dt)
+    if not (np.isfinite(dt) and dt > 0.0):
+        raise ValueError("dt must be finite and positive (s)")
+    if not np.isfinite(float(threshold)):
+        raise ValueError("threshold must be finite")
+    if S_ro_nu is not None and not (np.isfinite(float(S_ro_nu))
+                                    and float(S_ro_nu) >= 0.0):
+        raise ValueError("S_ro_nu must be finite and >= 0 (Hz^2/Hz)")
 
     rng = np.random.default_rng(seed)
     sj = budget.sj
@@ -223,10 +273,16 @@ def click_monte_carlo(budget, E_gamma, tauA, T0, scenario="C",
     out1 = score(batch(True))
     snr = float((out1.mean() - out0.mean()) /
                 np.sqrt(0.5 * (out0.var() + out1.var())))
+    eff = float(np.mean(out1 > threshold))
+    dark = float(np.mean(out0 > threshold))
+    n = n_trials
     return dict(
-        efficiency=float(np.mean(out1 > threshold)),
-        dark_fraction=float(np.mean(out0 > threshold)),
+        efficiency=eff,
+        dark_fraction=dark,
         snr=snr,
+        efficiency_err=float(np.sqrt(eff * (1.0 - eff) / n)),
+        dark_fraction_err=float(np.sqrt(dark * (1.0 - dark) / n)),
+        snr_err=float(np.sqrt((2.0 + 0.25 * snr ** 2) / (n - 1))),
         m_dip=float((m0 - tpl["ms"].min()) / m0),
         energy_residual=tpl["energy_residual"],
         Te_peak=tpl["Te_peak"],

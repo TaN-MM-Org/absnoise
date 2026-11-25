@@ -58,7 +58,11 @@ def _finite_row(rec, line):
 
 
 def save_ic_csv(path, T_K, Ic_A, sigma_Ic_A=None):
-    """Write an Ic(T) curve in the documented contract."""
+    """Write an Ic(T) curve in the documented contract.
+
+    Since 0.17.0 it refuses what `load_ic_csv` refuses: non-finite
+    values and temperatures that do not strictly increase (up to
+    0.16.0 such a file was written and could not be read back)."""
     T = np.asarray(T_K, dtype=float).ravel()
     Ic = np.asarray(Ic_A, dtype=float).ravel()
     if T.size != Ic.size or T.size < 2:
@@ -69,6 +73,13 @@ def save_ic_csv(path, T_K, Ic_A, sigma_Ic_A=None):
         sig = np.asarray(sigma_Ic_A, dtype=float).ravel()
         if sig.size != T.size:
             raise ValueError("sigma_Ic_A must match T_K")
+    if not (np.all(np.isfinite(T)) and np.all(np.isfinite(Ic))
+            and (sig is None or np.all(np.isfinite(sig)))):
+        raise ValueError("non-finite value: the file could not be read "
+                         "back (load_ic_csv refuses nan and inf)")
+    if np.any(np.diff(T) <= 0.0):
+        raise ValueError("T_K must be strictly increasing (load_ic_csv "
+                         "refuses anything else)")
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(_IC3 if sig is not None else _IC2)
@@ -143,10 +154,17 @@ def validate_ic_data(T_K, Ic_A, max_T_K=30.0, max_Ic_A=1e-3):
 
 
 def save_trace_csv(path, dt_s, y):
-    """Write a uniformly sampled trace in the documented contract."""
+    """Write a uniformly sampled trace in the documented contract.
+
+    Since 0.17.0 non-finite samples are refused, as `load_trace_csv`
+    refuses them (up to 0.16.0 such a file was written and could not be
+    read back)."""
     y = np.asarray(y, dtype=float).ravel()
     if y.size < 2:
         raise ValueError("need at least 2 samples")
+    if not np.all(np.isfinite(y)):
+        raise ValueError("non-finite sample: the file could not be read "
+                         "back (load_trace_csv refuses nan and inf)")
     dt = float(dt_s)
     if not (dt > 0.0 and np.isfinite(dt)):
         raise ValueError("dt_s must be finite and positive")

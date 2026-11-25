@@ -30,7 +30,9 @@ Sampled data (new in 0.16.0): `allan_variance` averages a whole number
 m of samples, not a continuous window, and for windows of a few samples
 its expectation differs from the formula above (by 51 % for m = 1 at
 dt = tau/40). `avar_exponential(..., dt=dt)` gives the exact
-expectation for samples taken every dt.
+expectation for samples taken every dt. For a readout that records the
+mean over each sample interval (new in 0.17.0, sampling="average") the
+continuous-time formula is already exact.
 
 Exact facts the test suite asserts, rather than states:
 
@@ -81,8 +83,15 @@ def allan_variance(x, dt, m_list=None):
         while m <= n // 2:
             m_list.append(m)
             m *= 2
-    ms = np.asarray(m_list, dtype=int)
-    if ms.size == 0 or np.any(ms < 1) or np.any(ms > n // 2):
+    # (fixed in 0.17.0) a window that is not a whole number of samples
+    # is refused; up to 0.16.0 it was cut to an integer without notice
+    # (m = 2.5 gave the Allan variance at m = 2, reported at 2 dt)
+    mf = np.asarray(m_list, dtype=float).ravel()
+    if mf.size == 0 or not np.all(np.isfinite(mf)) \
+            or np.any(mf != np.round(mf)):
+        raise ValueError("each window m must be a whole number of samples")
+    ms = mf.astype(int)
+    if np.any(ms < 1) or np.any(ms > n // 2):
         raise ValueError("each window must satisfy 1 <= m <= len(x)//2")
     csum = np.concatenate([[0.0], np.cumsum(x)])
     taus = ms * dt
@@ -133,7 +142,8 @@ def _avar_sampled_bracket(m, eps):
     return out.reshape(shape)
 
 
-def avar_exponential(var: float, tau_c: float, T, dt: float | None = None):
+def avar_exponential(var: float, tau_c: float, T, dt: float | None = None,
+                     sampling: str = "instant"):
     """Closed-form Allan variance of exponentially correlated noise.
 
     var : process variance (for a telegraph occupation, f (1 - f)).
@@ -170,6 +180,16 @@ def avar_exponential(var: float, tau_c: float, T, dt: float | None = None):
     0.2 % at m = 20. With dt, every T must be a whole number m >= 1 of
     sample intervals (within 1e-9 relative), as the windows of
     `allan_variance` are.
+
+    sampling (new in 0.17.0): "instant" (the default; each sample is
+    the value of the process at one instant, as above) or "average"
+    (each sample is the mean of the process over its own sample
+    interval, as an integrating readout records it; needs dt). The
+    mean of m such samples is the mean of the process over the window
+    m dt, so their Allan variance is exactly the continuous-time form
+    at T = m dt, which is returned (the tests check this against the
+    double sum over the autocovariance of the averaged samples in
+    50-digit arithmetic).
     """
     v = float(var)
     tau = float(tau_c)
@@ -180,6 +200,11 @@ def avar_exponential(var: float, tau_c: float, T, dt: float | None = None):
     T = np.asarray(T, dtype=float)
     if np.any(T <= 0.0) or not np.all(np.isfinite(T)):
         raise ValueError("averaging times must be finite and positive")
+    if sampling not in ("instant", "average"):
+        raise ValueError("sampling must be 'instant' or 'average'")
+    if dt is None and sampling != "instant":
+        raise ValueError("sampling='average' describes sampled data: "
+                         "give the sample interval dt too")
     if dt is not None:
         dt = float(dt)
         if not (np.isfinite(dt) and dt > 0.0):
@@ -189,6 +214,7 @@ def avar_exponential(var: float, tau_c: float, T, dt: float | None = None):
             raise ValueError("with dt, every averaging time must be a "
                              "whole number m >= 1 of sample intervals "
                              "(T = m dt), as in allan_variance")
+    if dt is not None and sampling == "instant":
         a = -np.expm1(-dt / tau)                 # 1 - r
         eps = np.full_like(m, dt / tau)
         out = v * _avar_sampled_bracket(m, eps) / (m ** 2 * a ** 2)
@@ -225,10 +251,13 @@ def avar_white(S0, T):
     limit with S0 = 4 var tauA.
     """
     S0 = float(S0)
-    if S0 < 0.0:
-        raise ValueError("a power spectral density cannot be negative")
+    # (changed in 0.17.0) non-finite inputs are refused; up to 0.16.0 a
+    # NaN S0 or T returned NaN
+    if not (np.isfinite(S0) and S0 >= 0.0):
+        raise ValueError("a power spectral density must be finite and "
+                         ">= 0")
     T = np.asarray(T, dtype=float)
-    if np.any(T <= 0.0):
-        raise ValueError("averaging times must be positive")
+    if np.any(T <= 0.0) or not np.all(np.isfinite(T)):
+        raise ValueError("averaging times must be finite and positive")
     out = S0 / (2.0 * T)
     return float(out) if out.ndim == 0 else out

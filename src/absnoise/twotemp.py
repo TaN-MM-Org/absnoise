@@ -100,6 +100,13 @@ def two_temperature_click(budget, E_gamma, tauA, T0, c_ph=None,
         raise ValueError("T0 must be finite and positive (K)")
     if scenario not in ("C", "T"):
         raise ValueError("scenario must be 'C' or 'T'")
+    # (fixed in 0.17.0) up to 0.16.0 dt = 0 raised ZeroDivisionError and
+    # a negative dt "negative dimensions are not allowed"
+    dt, t_end = float(dt), float(t_end)
+    if not (np.isfinite(dt) and dt > 0.0):
+        raise ValueError("dt must be finite and positive (s)")
+    if not (np.isfinite(t_end) and t_end >= 0.0):
+        raise ValueError("t_end must be finite and >= 0 (s)")
 
     A = budget.recipe.area
     Sig, dlt = budget.sigma, budget.delta

@@ -119,7 +119,18 @@ def steady_temperature(P, Tp, area, sigma=2.0, delta=3):
     of the phonon temperature. The test suite verifies the exact
     round trip ep_power(steady_temperature(P)) = P."""
     P = np.asarray(P, dtype=float)
-    if np.any(P < 0):
-        raise ValueError("absorbed power must be non-negative")
+    if np.any(P < 0) or not np.all(np.isfinite(P)):
+        raise ValueError("absorbed power must be finite and non-negative")
+    # (fixed in 0.17.0) the other inputs are checked as in
+    # `ep_temperature`; up to 0.16.0 a negative Tp, area or sigma
+    # returned NaN or a negative temperature
+    Tp, area, sigma, delta = float(Tp), float(area), float(sigma), \
+        float(delta)
+    if not (np.isfinite(Tp) and Tp >= 0.0):
+        raise ValueError("Tp must be finite and >= 0 (K)")
+    if not (np.isfinite(area) and area > 0.0 and np.isfinite(sigma)
+            and sigma > 0.0 and np.isfinite(delta) and delta > 0.0):
+        raise ValueError("area, sigma and delta must be finite and "
+                         "positive")
     out = (Tp ** delta + P / (sigma * area)) ** (1.0 / delta)
     return float(out) if out.ndim == 0 else out

@@ -31,8 +31,25 @@ import numpy as np
 from .constants import KB
 
 
+def _check_rates(f, Gs, Gp):
+    """The input rules of `sigma_spectrum` (shared with
+    `channel_generator` since 0.17.0)."""
+    f, Gs, Gp = float(f), float(Gs), float(Gp)
+    if not (0.0 <= f <= 1.0):
+        raise ValueError("occupation f must lie in [0, 1]")
+    if not (np.isfinite(Gs) and Gs > 0.0 and np.isfinite(Gp)
+            and Gp >= 0.0):
+        raise ValueError("rates must be finite, Gs > 0 and Gp >= 0")
+    return f, Gs, Gp
+
+
 def channel_generator(f, Gs, Gp):
-    """Rate matrix W (W[i,j] = rate j->i) for states [00, 01, 10, 11]."""
+    """Rate matrix W (W[i,j] = rate j->i) for states [00, 01, 10, 11].
+
+    Since 0.17.0 the inputs are checked as in `sigma_spectrum` (f in
+    [0, 1], Gs > 0, Gp >= 0, finite); up to 0.16.0 a negative rate
+    gave a matrix with negative off-diagonal rates."""
+    f, Gs, Gp = _check_rates(f, Gs, Gp)
     W = np.zeros((4, 4))
     up, dn = Gs * f, Gs * (1.0 - f)
     # single-spin flips: 00<->01, 00<->10, 01<->11, 10<->11
@@ -65,12 +82,7 @@ def sigma_spectrum(f: float, Gs: float, Gp: float, omegas):
     (S0 = 0, tau_eff = 0 instead of 1/Gs). Other results agree with
     0.12.1 to rounding (tested to 1e-12).
     """
-    f, Gs, Gp = float(f), float(Gs), float(Gp)
-    if not (0.0 <= f <= 1.0):
-        raise ValueError("occupation f must lie in [0, 1]")
-    if not (np.isfinite(Gs) and Gs > 0.0 and np.isfinite(Gp)
-            and Gp >= 0.0):
-        raise ValueError("rates must be finite, Gs > 0 and Gp >= 0")
+    f, Gs, Gp = _check_rates(f, Gs, Gp)
     g = 1.0 - f
     rf = np.sqrt(f * g)
     d = np.array([g, rf, rf, f])            # sqrt of the stationary law
@@ -102,14 +114,36 @@ def sigma_spectrum(f: float, Gs: float, Gp: float, omegas):
 
 
 def tau_activated(E, Delta, T, tau0):
-    """Scenario-B exchange time tau(E) = tau0 exp[(Delta - E)/kB T]."""
-    return tau0 * np.exp(np.clip((Delta - E) / (KB * T), 0.0, 500.0))
+    """Scenario-B exchange time tau(E) = tau0 exp[(Delta - E)/kB T].
+
+    The exponent is clipped to [0, 500]: a level at or above the gap
+    gets tau0. Since 0.17.0 T and tau0 must be finite and positive and
+    E and Delta finite (up to 0.16.0 T = 0 raised ZeroDivisionError for
+    Python floats and returned tau0 e^500 for arrays, and a negative T
+    returned tau0)."""
+    T, tau0 = float(T), float(tau0)
+    if not (np.isfinite(T) and T > 0.0):
+        raise ValueError("T must be finite and positive (K)")
+    if not (np.isfinite(tau0) and tau0 > 0.0):
+        raise ValueError("tau0 must be finite and positive (s)")
+    E = np.asarray(E, dtype=float)
+    if not (np.all(np.isfinite(E)) and np.all(np.isfinite(Delta))):
+        raise ValueError("E and Delta must be finite (J)")
+    out = tau0 * np.exp(np.clip((Delta - E) / (KB * T), 0.0, 500.0))
+    return float(out) if np.ndim(out) == 0 else out
 
 
 def noneq_penalty(f, q):
     """Resolution degradation factor sqrt[q(1-q) / f(1-f)] from a
-    nonequilibrium steady-state occupation q >= f."""
+    nonequilibrium steady-state occupation q >= f.
+
+    Since 0.17.0, f must lie in (0, 1) and q in [0, 1]. Up to 0.16.0
+    f = 0 returned about 1e149 (a division by the floor 1e-300) and a
+    q above 1 returned 0, without notice."""
     f = np.asarray(f, dtype=float)
     q = np.asarray(q, dtype=float)
-    return np.sqrt(np.maximum(q * (1 - q), 0) /
-                   np.maximum(f * (1 - f), 1e-300))
+    if not np.all((f > 0.0) & (f < 1.0)):
+        raise ValueError("the equilibrium occupation f must lie in (0, 1)")
+    if not np.all((q >= 0.0) & (q <= 1.0)):
+        raise ValueError("the occupation q must lie in [0, 1]")
+    return np.sqrt(q * (1 - q) / (f * (1 - f)))

@@ -85,6 +85,9 @@ class EPCouplingFit:
         (above about 1e8 the parameters are nearly degenerate).
     Te_fit : the model at the measured powers; area : as given (m^2);
     n_points : number of points.
+    power_scale_error : the relative error of the power calibration
+        given to the fit (new in 0.17.0), already included in `sigma`
+        and `cov` of Sigma.
     """
 
     Sigma: float
@@ -99,6 +102,7 @@ class EPCouplingFit:
     Te_fit: np.ndarray
     area: float
     n_points: int
+    power_scale_error: float = 0.0
 
     def G(self, T) -> np.ndarray:
         """Thermal conductance dP/dTe = delta Sigma A Te^(delta-1) (W/K)
@@ -193,7 +197,8 @@ class EPCouplingFit:
 
 
 def fit_ep_coupling(P_W, Te_K, area, Tp_K, sigma_Te=None, delta=None,
-                    fit_Tp=False, Sigma0=None) -> EPCouplingFit:
+                    fit_Tp=False, Sigma0=None,
+                    power_scale_error=0.0) -> EPCouplingFit:
     """Fit the electron-phonon cooling law to a measured self-heating
     curve.
 
@@ -212,6 +217,15 @@ def fit_ep_coupling(P_W, Te_K, area, Tp_K, sigma_Te=None, delta=None,
         al.).
     fit_Tp : also fit the bath temperature.
     Sigma0 : optional starting value of Sigma (W m^-2 K^-delta).
+    power_scale_error : relative one-standard-deviation error of the
+        heater calibration, a factor k common to all powers (new in
+        0.17.0; default 0, the powers taken as exact). The model
+        depends on P / Sigma only, so if the true powers are k P_W the
+        fit gives Sigma / k and the same delta and Tp, exactly (checked
+        in the tests). The calibration therefore adds
+        (Sigma * power_scale_error)^2 to the variance of Sigma and
+        nothing to delta or Tp (k is independent of the Te noise). A
+        scatter of the powers from point to point is not covered.
 
     Returns an `EPCouplingFit`. Raises ValueError on malformed input,
     on a fit that ends at an end of the delta range (the data do not
@@ -354,6 +368,13 @@ def fit_ep_coupling(P_W, Te_K, area, Tp_K, sigma_Te=None, delta=None,
             "delta are strongly correlated (only G = delta Sigma A "
             "Tp^(delta-1) is well determined) -- inspect `cov`",
             stacklevel=2)
+    pse = float(power_scale_error)
+    if not (np.isfinite(pse) and pse >= 0.0):
+        raise ValueError("power_scale_error must be finite and >= 0 "
+                         "(a relative error)")
+    if pse > 0.0:
+        cov = cov.copy()
+        cov[0, 0] += (Sg * pse) ** 2
     err = np.sqrt(np.diag(cov))
     return EPCouplingFit(
         Sigma=float(Sg), delta=float(dl), Tp=float(tp),
@@ -361,4 +382,4 @@ def fit_ep_coupling(P_W, Te_K, area, Tp_K, sigma_Te=None, delta=None,
         cov=cov, names=names, chi2=chi2, chi2_dof=chi2_dof,
         condition_number=cond,
         Te_fit=(tp ** dl + P / (Sg * area)) ** (1.0 / dl),
-        area=area, n_points=n)
+        area=area, n_points=n, power_scale_error=pse)

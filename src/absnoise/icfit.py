@@ -101,7 +101,18 @@ def ic_model(T, Ic0: float, Tc: float, tau: float, n_phi: int = 601):
 
     T in K (scalar or array), Ic0 in A, Tc in K, 0 < tau <= 1. Returns
     Ic in A; exactly 0 at and above Tc, where the gap has closed (NaN
-    up to 0.11.0)."""
+    up to 0.11.0).
+
+    Since 0.17.0 inputs outside these ranges are refused: up to 0.16.0
+    tau > 1 or tau <= 0 returned NaN (with a RuntimeWarning at most),
+    and so did a negative temperature."""
+    Ic0, Tc, tau = float(Ic0), float(Tc), float(tau)
+    if not np.isfinite(Ic0):
+        raise ValueError("Ic0 must be finite (A)")
+    if not (np.isfinite(Tc) and Tc > 0.0):
+        raise ValueError("Tc must be finite and positive (K)")
+    if not (0.0 < tau <= 1.0):
+        raise ValueError("tau must lie in (0, 1]")
     out = Ic0 * _shape_max(T, Tc, tau, n_phi) / _shape_zero(Tc, tau)
     return float(out[0]) if np.ndim(T) == 0 else out
 

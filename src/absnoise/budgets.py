@@ -224,7 +224,14 @@ class SensorBudget:
     def freq_noise_spectrum(self, T, tauA, freqs, which="L"):
         """Predicted single-sided fractional-frequency PSD S_y(f) (1/Hz)
         and absolute S_nu (Hz^2/Hz) of the readout resonator from
-        Andreev occupation noise."""
+        Andreev occupation noise.
+
+        freqs (Hz): scalar or array, finite and >= 0. (Fixed in 0.17.0:
+        a list raised TypeError, and a NaN frequency returned NaN; both
+        are now handled as in `nep_spectrum`.)"""
+        f = np.asarray(freqs, dtype=float)
+        if np.any(f < 0) or not np.all(np.isfinite(f)):
+            raise ValueError("frequencies must be finite and >= 0")
         T = self._check_T(T)
         tauA = self._check_pos(tauA, "tauA")
         if which not in ("L", "I"):
@@ -232,7 +239,7 @@ class SensorBudget:
         phi = 1e-4 if which == "L" else self.sj.phi_max(T)
         s = self.sj.andreev_sums(phi, T, which)
         I1 = self.sj.dIdphi0(T)
-        SI = s["S0_over_tau"] * tauA / (1.0 + (2 * np.pi * freqs *
+        SI = s["S0_over_tau"] * tauA / (1.0 + (2 * np.pi * f *
                                                tauA)**2)
         p = self.participation(T)
         Sy = (p / 2.0)**2 * SI / I1**2

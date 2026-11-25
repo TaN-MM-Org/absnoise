@@ -19,7 +19,7 @@ from .levels import JunctionModel, _theta, abs_energies, gap_bcs
 
 
 def _branch_levels(phi, tau, c, Delta):
-    """Levels of one channel labelled by their branch (new in 0.14.0).
+    """Levels of one channel labeled by their branch (new in 0.14.0).
 
     The level condition theta(E) = +-a - 2 pi k (see `abs_energies`)
     is solved with the signed angle a_s(phi) = 2 asin(sqrt(tau)

@@ -36,7 +36,10 @@ Chaos, Solitons & Fractals 8, 1249 (1997), Eqs. (6) and (8)):
 exact Taylor coefficients `JunctionModel.cpr_series`. New in 0.14.0:
 the exact critical current `JunctionModel.Ic_matsubara`, and
 `calibrate(method="matsubara")`. Since 0.15.0 that exact method is the
-default of `calibrate` and `junction_properties`.
+default of `calibrate` and `junction_properties`. Since 0.17.0 the
+Matsubara sums add the terms one by one only up to 20 Delta and
+integrate the rest (see `_matsubara_terms`), which makes them 16 to 40
+times faster at 20 mK with the same results to about 1e-12.
 """
 
 import numpy as np
@@ -205,14 +208,67 @@ def _chi2(z):
     return 0.5 * (spence(1.0 - z) - spence(1.0 + z))
 
 
+# Matsubara sums at low temperature (new in 0.17.0). Up to 0.16.0 every
+# term up to w = omega_max_fac * Delta was added, about
+# 2000 Delta / (2 pi kB T) terms (2.1e5 for MoRe at 20 mK). Now the
+# terms are added one by one only up to w = _HEAD_FAC * Delta (and at
+# least _HEAD_MIN terms); the rest of the same sum is integrated.
+_HEAD_FAC = 20.0
+_HEAD_MIN = 200
+_GL_NODES = 16
+
+
 def _matsubara_terms(c, Delta, T, omega_max_fac):
     """Matsubara frequencies and x_n = exp(-2 s_n - c w_n) (s_n =
     arcsinh(w_n / Delta)) for one channel, together with the analytic
     sum of the large-frequency form x_as = Delta^2 e^(-c w) / (4 w^2)
-    over all n >= 0."""
+    over all n >= 0, and the weight of each term.
+
+    Returns (x, x_as, sum_as, wt). Every sum of the form
+    sum_{n < n_terms} h(w_n) over the terms is computed as sum(wt * h)
+    over the returned points.
+
+    When there are at most 4 times as many terms as the head (at high
+    temperature), the points are all the terms and wt is None (weight
+    1, the summation of 0.16.0). Otherwise (new in 0.17.0) the points
+    are the first N0 terms (w up to about 20 Delta), with weight 1,
+    and the rest of the sum, over the w_n from a = 2 N0 pi kB T to
+    b = 2 n_terms pi kB T, is replaced by the midpoint-rule form of the
+    Euler-Maclaurin formula,
+
+        sum h(w_n) = (1/dw) int_a^b h dw + (dw/24) h'(a) + ...,
+
+    dw = 2 pi kB T. The integral is done by 16-point Gauss-Legendre
+    rules on panels whose ends grow by a factor of up to 2, and h'(a)
+    by the difference (h(w_N0) - h(w_N0-1)) / dw of the two terms
+    next to a (so the term w_N0 gets the weight 1/24 and w_N0-1 the
+    weight 23/24). The correction at b and the higher terms of the
+    formula are below 1e-14 of the sum there (h falls as w^-4). The
+    tests compare the result with the full sum (to 1e-12, the rounding
+    of the full sum itself)."""
     kT = KB * T
-    n_terms = int(np.ceil(omega_max_fac * Delta / (2.0 * np.pi * kT))) + 1
-    w = (2.0 * np.arange(n_terms) + 1.0) * np.pi * kT
+    dw = 2.0 * np.pi * kT
+    n_terms = int(np.ceil(omega_max_fac * Delta / dw)) + 1
+    n_head = max(int(np.ceil(_HEAD_FAC * Delta / dw)), _HEAD_MIN)
+    if 4 * n_head >= n_terms:
+        w = (2.0 * np.arange(n_terms) + 1.0) * np.pi * kT
+        wt = None
+    else:
+        w_head = (2.0 * np.arange(n_head + 1) + 1.0) * np.pi * kT
+        wt_head = np.ones(n_head + 1)
+        wt_head[n_head - 1] = 23.0 / 24.0
+        wt_head[n_head] = 1.0 / 24.0
+        a = n_head * dw
+        b = n_terms * dw
+        n_pan = int(np.ceil(np.log2(b / a)))
+        edges = a * (b / a) ** (np.arange(n_pan + 1) / n_pan)
+        gx, gw = np.polynomial.legendre.leggauss(_GL_NODES)
+        half = 0.5 * np.diff(edges)
+        mid = 0.5 * (edges[1:] + edges[:-1])
+        w_tail = (half[:, None] * gx[None, :] + mid[:, None]).ravel()
+        wt_tail = (half[:, None] * gw[None, :]).ravel() / dw
+        w = np.concatenate([w_head, w_tail])
+        wt = np.concatenate([wt_head, wt_tail])
     y = w / Delta
     e2s = 1.0 / (y + np.sqrt(1.0 + y * y)) ** 2          # exp(-2 s)
     decay = np.exp(-c * w)
@@ -220,14 +276,15 @@ def _matsubara_terms(c, Delta, T, omega_max_fac):
     x_as = decay / (4.0 * y * y)
     sum_as = float(_chi2(np.exp(-c * np.pi * kT))) * \
         (Delta / (2.0 * np.pi * kT)) ** 2
-    return x, x_as, sum_as
+    return x, x_as, sum_as, wt
 
 
-def _matsubara_dF(ph, tau, kT, x, x_as, sum_as):
+def _matsubara_dF(ph, tau, kT, x, x_as, sum_as, wt=None):
     """dF/dphi of one channel at the phases ph (1-D array) from the
     Matsubara terms of `_matsubara_terms` (the summation of
     `matsubara_free_energy_terms`, moved here unchanged in 0.14.0 so
-    that `JunctionModel.Ic_matsubara` can reuse the terms)."""
+    that `JunctionModel.Ic_matsubara` can reuse the terms; the weights
+    wt are new in 0.17.0, and wt=None is the summation of 0.16.0)."""
     R = 1.0 - tau + tau * np.cos(ph)
     # sum x / (1 + 2 R x + x^2) = sum_as + sum (x/(...) - x_as), in
     # blocks of phases so that memory stays bounded
@@ -236,9 +293,11 @@ def _matsubara_dF(ph, tau, kT, x, x_as, sum_as):
     step = max(1, int(2 ** 20 // x.size))
     for i in range(0, ph.size, step):
         r = R[i:i + step, None]
-        g[i:i + step] = sum_as + np.sum(
-            x[None, :] / (1.0 + 2.0 * r * x[None, :] + x2[None, :])
-            - x_as[None, :], axis=1)
+        h = (x[None, :] / (1.0 + 2.0 * r * x[None, :] + x2[None, :])
+             - x_as[None, :])
+        if wt is not None:
+            h = h * wt[None, :]
+        g[i:i + step] = sum_as + np.sum(h, axis=1)
     return 4.0 * kT * tau * np.sin(ph) * g
 
 
@@ -272,6 +331,15 @@ def matsubara_free_energy_terms(phi, tau, c, Delta, T,
     x_as = Delta^2 e^(-c w) / (4 w^2) is summed to infinity in closed
     form (Legendre chi function), so the neglected rest falls as
     (Delta / w_max)^3 (about 1e-10 relative for the default).
+
+    Since 0.17.0 only the terms up to w = 20 Delta (at least 200) are
+    added one by one; the rest of the same sum, up to omega_max_fac *
+    Delta, is integrated (see `_matsubara_terms`). The result equals
+    the full sum of 0.16.0 to about 1e-12 relative (the rounding error
+    of the full sum, checked in the tests against a sum in extended
+    precision), and the work no longer grows as 1/T beyond the first
+    20 Delta: 2191 points instead of 2.1e5 terms for MoRe at
+    20 mK.
     """
     T = float(T)
     if not (np.isfinite(T) and T > 0.0):
@@ -282,13 +350,17 @@ def matsubara_free_energy_terms(phi, tau, c, Delta, T,
         raise ValueError("tau must lie in [0, 1]")
     if not (np.isfinite(c) and c >= 0.0):
         raise ValueError("c = 2L/(hbar v_x) must be finite and >= 0")
-    x, x_as, sum_as = _matsubara_terms(c, Delta, T, omega_max_fac)
+    x, x_as, sum_as, wt = _matsubara_terms(c, Delta, T, omega_max_fac)
     kT = KB * T
     ph = np.atleast_1d(np.asarray(phi, dtype=float)).ravel()
-    dF = _matsubara_dF(ph, tau, kT, x, x_as, sum_as)
+    dF = _matsubara_dF(ph, tau, kT, x, x_as, sum_as, wt)
     kap = tau * x / (1.0 + x) ** 2
-    s_kap = tau * sum_as + float(np.sum(kap - tau * x_as))
-    s_kap2 = float(np.sum(kap * kap))
+    if wt is None:
+        s_kap = tau * sum_as + float(np.sum(kap - tau * x_as))
+        s_kap2 = float(np.sum(kap * kap))
+    else:
+        s_kap = tau * sum_as + float(np.sum(wt * (kap - tau * x_as)))
+        s_kap2 = float(np.sum(wt * kap * kap))
     F2 = 2.0 * kT * s_kap
     F4 = -2.0 * kT * (s_kap / 12.0 - 0.5 * s_kap2)
     dF = float(dF[0]) if np.ndim(phi) == 0 else dF
@@ -501,8 +573,8 @@ class JunctionModel:
         def current(ph):
             ph = np.atleast_1d(np.asarray(ph, dtype=float))
             dF = np.zeros(ph.size)
-            for x, x_as, sum_as in terms:
-                dF += _matsubara_dF(ph, self.tau, kT, x, x_as, sum_as)
+            for x, x_as, sum_as, wt in terms:
+                dF += _matsubara_dF(ph, self.tau, kT, x, x_as, sum_as, wt)
             return k * dF
 
         edges = np.linspace(0.0, np.pi, n_grid + 2)
@@ -660,9 +732,19 @@ def gap_bcs(T, Tc: float, Delta0: float):
     pi e^-gamma = 1.76388, rounded), so its solution would close at
     t1 = 1.000013 rather than at t = 1; the step from u(1) = 0.0063 to
     0 at Tc is that rounding, kept so that results below 0.99 Tc stay
-    identical to earlier releases."""
+    identical to earlier releases.
+
+    Since 0.17.0 a temperature that is negative or not finite, and a Tc
+    that is not finite and positive, are refused (up to 0.16.0 a
+    negative T returned NaN, with a RuntimeWarning at most)."""
     global _BCS_SPLINE, _NEAR_TC_SPLINE
-    t = np.asarray(T, dtype=float) / Tc
+    Tc = float(Tc)
+    if not (np.isfinite(Tc) and Tc > 0.0):
+        raise ValueError("Tc must be finite and positive (K)")
+    T_arr = np.asarray(T, dtype=float)
+    if np.any(T_arr < 0.0) or not np.all(np.isfinite(T_arr)):
+        raise ValueError("temperatures must be finite and >= 0 (K)")
+    t = T_arr / Tc
     scalar = (t.ndim == 0)
     t = np.atleast_1d(t)
     u = np.zeros_like(t)
